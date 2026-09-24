@@ -7,14 +7,17 @@ class Server {
     constructor(){
         this.app = express();
         this.port = process.env.PORT;
-
+        this.app.use(express.json());
+        this.routes();
+        
+        this.dbConnection();
 
         this.app.get(
             '/', (req, res) => {
                 res.sendFile(path.join(__dirname,'../public','index.html'))
             } 
         )
-        this.dbConnection();
+        
     }
 
 
@@ -31,6 +34,9 @@ class Server {
         } catch (error) {
             console.error('No se pudo Conectar a la BD MySQL', error);
         }
+    }
+    routes() {
+        this.app.use('/api/usuarios', require('../routes/usuarios.route'));
     }
 }
 
