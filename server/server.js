@@ -12,6 +12,8 @@ class Server {
         
         this.dbConnection();
 
+        this.app.use(express.static(path.join(__dirname,'..','public')));
+
         this.app.get(
             '/', (req, res) => {
                 res.sendFile(path.join(__dirname,'../public','index.html'))

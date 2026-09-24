@@ -34,3 +34,6 @@ const registrarUsuario = async (req, res) => {
         res.status(500).json({ msg: 'Error al registrar el usuario' });
     }
 }
+module.exports = {
+    registrarUsuario
+};
