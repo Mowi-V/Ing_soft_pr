@@ -20,7 +20,7 @@ const Cliente = bdMySQL.define('Cliente', {
     timestamps: false
 });
 
-// Definir la relación: Un Usuario tiene un Cliente (Relación 1 a 1 de herencia)
+
 Usuario.hasOne(Cliente, { foreignKey: 'id_cliente', onDelete: 'CASCADE' });
 Cliente.belongsTo(Usuario, { foreignKey: 'id_cliente' });
 
