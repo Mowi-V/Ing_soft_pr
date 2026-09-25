@@ -14,7 +14,8 @@ document.getElementById('formRegistro').addEventListener('submit', async functio
         rol: rol,
         nombre: "Juan", // (Aquí tomarías los demás datos)
         apellido: "Perez",
-        descripcion_perfil: "dsadsadsas"
+        descripcion_perfil: "dsadsadsas",
+        direccion: "sdadsadasdsadas"
     };
 
     try {

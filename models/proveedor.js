@@ -20,7 +20,7 @@ const Proveedor = bdMySQL.define('Proveedor', {
     timestamps: false
 });
 
-// Definir la relación: Un Usuario tiene un Proveedor (Relación 1 a 1 de herencia)
+
 Usuario.hasOne(Proveedor, { foreignKey: 'id_proveedor', onDelete: 'CASCADE' });
 Proveedor.belongsTo(Usuario, { foreignKey: 'id_proveedor' });
 
