@@ -3,7 +3,6 @@ const { bdMySQL } = require('../database/db_conection');
 const Usuario = require('../models/usuario');
 const Cliente = require('../models/cliente');
 const Proveedor = require('../models/proveedor');
-const bcrypt = require('bcryptjs');
 const { generarJWT } = require('../helpers/generar-jwt');
 
 const registrarUsuario = async (req, res) => {
