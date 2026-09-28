@@ -22,7 +22,6 @@ class Server {
         
     }
 
-
     listen() {
         this.app.listen(this.port, () => {
             console.log('Servidor corriendo en puerto', this.port);
@@ -40,6 +39,9 @@ class Server {
     routes() {
         this.app.use('/api/usuarios', require('../routes/usuarios.route'));
         this.app.use('/api/recuperacion', require('../routes/recuperacion.route'));
+        this.app.use('/api/clientes', require('../routes/clientes.route'));
+        this.app.use('/api/proveedores', require('../routes/proveedores.route'));
+        this.app.use('/api/servicios', require('../routes/servicios.route'));
     }
 }
 

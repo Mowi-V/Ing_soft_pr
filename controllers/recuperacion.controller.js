@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const nodemailer = require('nodemailer'); // Importamos Nodemailer
+const nodemailer = require('nodemailer'); 
 const Usuario = require('../models/usuario');
 const RecuperacionCredencial = require('../models/recuperacion');
 
