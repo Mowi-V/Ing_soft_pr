@@ -14,11 +14,14 @@ class Server {
 
         this.app.use(express.static(path.join(__dirname,'..','dist')));
 
-        this.app.get(
+        this.app.use((req, res) => {
+            res.sendFile(path.resolve(__dirname, '../dist/index.html'));
+        });
+        /*this.app.get(
             '/', (req, res) => {
                 res.sendFile(path.join(__dirname,'../dist','index.html'))
             } 
-        )
+        )*/
         
     }
 
