@@ -59,14 +59,16 @@ const solicitarRecuperacion = async (req, res) => {
         await transporter.sendMail(mailOptions, (error, info) => {
             if (error) {
                 console.error('Error al enviar el correo:', error);
+                
             } else {
                 console.log('Correo de recuperación enviado:', info.response);
+                        res.status(200).json({ 
+                            msg: 'Si el correo está registrado, recibirás un enlace con instrucciones.' 
+                        });
             }
         });
 
-        res.status(200).json({ 
-            msg: 'Si el correo está registrado, recibirás un enlace con instrucciones.' 
-        });
+
 
     } catch (error) {
         console.error(error);
