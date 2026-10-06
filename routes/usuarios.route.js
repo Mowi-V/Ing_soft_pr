@@ -9,7 +9,7 @@ const router = Router();
 router.post('/registro', [
     check('correo_electronico', 'El correo no es válido').isEmail(),
     check('contrasena', 'La contraseña es obligatoria').not().isEmpty(),
-    check('rol', 'El rol no es válido').isIn(['C', 'P']) ,  
+    check('rol', 'El rol no es válido').isIn(['cliente', 'proveedor']) ,  
     validarCampos
 ], registrarUsuario);
 

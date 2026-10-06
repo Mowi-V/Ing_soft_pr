@@ -6,8 +6,22 @@ const Proveedor = require('../models/proveedor');
 const { generarJWT } = require('../helpers/generar-jwt');
 
 const registrarUsuario = async (req, res) => {
-    const { correo_electronico, contrasena, rol, nombre, apellido, direccion, descripcion_perfil } = req.body;
+   
+    const { 
+        correo_electronico, 
+        contrasena, 
+        rol, 
+        nombre, 
+        apellido, 
+        direccion, 
+        descripcion_perfil,
+        id_ciudad,
+        id_barrio,
+        informacion_complementaria
+    } = req.body;
     
+    const rolFormateado = (rol === 'cliente') ? 'C' : (rol === 'proveedor') ? 'P' : rol;
+
     const t = await bdMySQL.transaction();
 
     try {
@@ -15,13 +29,29 @@ const registrarUsuario = async (req, res) => {
         const contrasena_hash = bcrypt.hashSync(contrasena, salt);
 
         const usuario = await Usuario.create({
-            correo_electronico, contrasena_hash, rol, nombre, apellido
+            correo_electronico, 
+            contrasena_hash, 
+            rol: rolFormateado, 
+            nombre, 
+            apellido
         }, { transaction: t });
 
-        if (rol === 'C') {
-            await Cliente.create({ id_cliente: usuario.id_usuario, direccion }, { transaction: t });
-        } else if (rol === 'P') {
-            await Proveedor.create({ id_proveedor: usuario.id_usuario, descripcion_perfil }, { transaction: t });
+        if (rolFormateado === 'C') {
+            await Cliente.create({ 
+                id_cliente: usuario.id_usuario, 
+                id_ciudad,
+                id_barrio,
+                direccion,
+                informacion_complementaria
+            }, { transaction: t });
+
+        } else if (rolFormateado === 'P') {
+            // Inserción en Proveedor[cite: 3]
+            await Proveedor.create({ 
+                id_proveedor: usuario.id_usuario, 
+                descripcion_perfil 
+            }, { transaction: t });
+
         } else {
             throw new Error('Rol inválido');
         }
@@ -40,7 +70,6 @@ const login = async (req, res) => {
     const { correo_electronico, contrasena } = req.body;
 
     try {
-
         const usuario = await Usuario.findOne({ where: { correo_electronico } });
         if (!usuario) {
             return res.status(400).json({ msg: 'Credenciales no válidas' });
@@ -68,6 +97,7 @@ const login = async (req, res) => {
         res.status(500).json({ msg: 'Hable con el administrador' });
     }
 }
+
 module.exports = {
     registrarUsuario,
     login
