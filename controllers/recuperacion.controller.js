@@ -42,7 +42,7 @@ const solicitarRecuperacion = async (req, res) => {
         });
 
         const enlaceRecuperacion = `https://ing-soft-pr.onrender.com/restablecer-password?token=${token}`;
-
+        console.log(enlaceRecuperacion);
         const mailOptions = {
             from: `"Soporte Bienestar en Casa" <${process.env.EMAIL_USER}>`, 
             to: correo_electronico, 
@@ -56,7 +56,7 @@ const solicitarRecuperacion = async (req, res) => {
             `
         };
 
-        transporter.sendMail(mailOptions, (error, info) => {
+        await transporter.sendMail(mailOptions, (error, info) => {
             if (error) {
                 console.error('Error al enviar el correo:', error);
             } else {
