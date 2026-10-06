@@ -39,10 +39,10 @@ const obtenerPerfilCliente = async (req, res) => {
 
 const actualizarPerfilCliente = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
-    const { nombre, apellido, direccion } = req.body;
+    
+    const { nombre, apellido, id_ciudad, id_barrio, direccion, informacion_complementaria } = req.body;
 
     try {
-
         const usuario = await Usuario.findByPk(id_usuario);
         const cliente = await Cliente.findOne({ where: { id_cliente: id_usuario } });
 
@@ -50,15 +50,24 @@ const actualizarPerfilCliente = async (req, res) => {
             return res.status(404).json({ msg: 'Perfil de cliente no encontrado' });
         }
 
+        // Actualizamos las tablas asociadas
         await usuario.update({ nombre, apellido });
-        await cliente.update({ direccion });
+        await cliente.update({ 
+            id_ciudad, 
+            id_barrio, 
+            direccion, 
+            informacion_complementaria 
+        });
 
         res.json({
             msg: 'Perfil actualizado satisfactoriamente',
             perfil_actualizado: {
                 nombre: usuario.nombre,
                 apellido: usuario.apellido,
-                direccion: cliente.direccion
+                id_ciudad: cliente.id_ciudad,
+                id_barrio: cliente.id_barrio,
+                direccion: cliente.direccion,
+                informacion_complementaria: cliente.informacion_complementaria
             }
         });
 

@@ -69,13 +69,15 @@ const actualizarPerfilProveedor = async (req, res) => {
 
 const registrarZonaAtencion = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
-    const { ciudad, barrio_sector } = req.body;
+    
+    // Reemplazamos los textos por los IDs del diccionario
+    const { id_ciudad, id_barrio } = req.body;
 
     try {
         const nuevaZona = await ZonaAtencion.create({
             id_proveedor: id_usuario,
-            ciudad,
-            barrio_sector
+            id_ciudad,
+            id_barrio
         });
 
         res.status(201).json({
