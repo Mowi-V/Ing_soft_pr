@@ -17,7 +17,7 @@ const router = Router();
 
 router.get('/', listarProveedores);
 
-router.get('/:id', obtenerDetalleProveedor);
+
 
 router.get('/perfil', [
     validarJWT,
@@ -47,5 +47,8 @@ router.delete('/zonas/:id_zona', [
     check('id_zona', 'El ID de la zona debe ser un número entero').isInt(),
     validarCampos
 ], eliminarZonaAtencion);
+
+
+router.get('/:id', obtenerDetalleProveedor);
 
 module.exports = router;
