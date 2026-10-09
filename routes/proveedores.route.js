@@ -1,16 +1,23 @@
 const { Router } = require('express');
 const { check } = require('express-validator');
-
 const { 
     obtenerPerfilProveedor, 
     actualizarPerfilProveedor, 
-    registrarZonaAtencion 
+    registrarZonaAtencion,
+    eliminarZonaAtencion,
+    listarProveedores,
+    obtenerDetalleProveedor
 } = require('../controllers/proveedores.controller');
 
-const { validarJWT, esProveedor } = require('../middlewares/validar-jwt');
-const { validarCampos } = require('../middlewares/validar-campos');
+const { validarJWT, esProveedor } = require('../middlewares/validar-jwt'); 
+const { validarCampos } = require('../middlewares/validar-campos');        
 
 const router = Router();
+
+
+router.get('/', listarProveedores);
+
+router.get('/:id', obtenerDetalleProveedor);
 
 router.get('/perfil', [
     validarJWT,
@@ -29,9 +36,16 @@ router.put('/perfil', [
 router.post('/zonas', [
     validarJWT,
     esProveedor,
-    check('ciudad', 'La ciudad es obligatoria').not().isEmpty(),
-    check('barrio_sector', 'El barrio o sector es obligatorio').not().isEmpty(),
+    check('id_ciudad', 'El ID de la ciudad es obligatorio y debe ser un número entero').isInt(),
+    check('id_barrio', 'El ID del barrio es obligatorio y debe ser un número entero').isInt(),
     validarCampos
 ], registrarZonaAtencion);
+
+router.delete('/zonas/:id_zona', [
+    validarJWT,
+    esProveedor,
+    check('id_zona', 'El ID de la zona debe ser un número entero').isInt(),
+    validarCampos
+], eliminarZonaAtencion);
 
 module.exports = router;

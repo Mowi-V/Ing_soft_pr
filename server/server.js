@@ -46,7 +46,7 @@ class Server {
         this.app.use('/api/proveedores', require('../routes/proveedores.route'));
         this.app.use('/api/servicios', require('../routes/servicios.route'));
         this.app.use('/api/ubicaciones', require('../routes/ubicaciones.route'));
-
+        this.app.use('/api/servicios/:id/recursos', require('../routes/recursos.route'));
         
     }
 }
