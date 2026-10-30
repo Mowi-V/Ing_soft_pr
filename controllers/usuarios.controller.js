@@ -15,7 +15,6 @@ const registrarUsuario = async (req, res) => {
         apellido, 
         direccion, 
         descripcion_perfil,
-        id_comuna,
         id_barrio,
         informacion_complementaria
     } = req.body;
@@ -31,7 +30,7 @@ const registrarUsuario = async (req, res) => {
         }
 
         if (rolFormateado === 'C') {
-            const barrioValido = await Barrio.findOne({ where: { id_barrio, id_comuna } });
+            const barrioValido = await Barrio.findOne({ where: { id_barrio } });
             if (!barrioValido) {
                 await t.rollback();
                 return res.status(400).json({ msg: 'El barrio seleccionado no pertenece a la comuna indicada' });
@@ -52,7 +51,6 @@ const registrarUsuario = async (req, res) => {
         if (rolFormateado === 'C') {
             await Cliente.create({ 
                 id_cliente: usuario.id_usuario, 
-                id_comuna,
                 id_barrio,
                 direccion,
                 informacion_complementaria: informacion_complementaria || null
@@ -99,7 +97,6 @@ const login = async (req, res) => {
 
         const token = await generarJWT(usuario.id_usuario, usuario.rol);
 
-        // Envío del JWT encapsulado en Cookie HttpOnly
         res.cookie('token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
@@ -116,7 +113,7 @@ const login = async (req, res) => {
                 nombre: usuario.nombre,
                 apellido: usuario.apellido
             },
-            token // Se mantiene en el JSON para compatibilidad con Postman
+            token 
         });
     } catch (error) {
         console.error('Error en login:', error);
@@ -124,7 +121,6 @@ const login = async (req, res) => {
     }
 };
 
-// HU-002: Cierre de sesión seguro invalidando la cookie
 const logout = (req, res) => {
     res.clearCookie('token', {
         httpOnly: true,
@@ -137,7 +133,6 @@ const logout = (req, res) => {
     });
 };
 
-// HU-002: Endpoint para verificar sesión activa al cargar React
 const verificarSesion = async (req, res) => {
     try {
         const { id_usuario } = req.usuarioAutenticado;
