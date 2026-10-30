@@ -3,9 +3,11 @@ const { check } = require('express-validator');
 const { 
     crearSolicitud, 
     obtenerMisSolicitudes, 
-    obtenerDetalleSolicitudCliente 
+    obtenerDetalleSolicitudCliente,
+    obtenerSolicitudesProveedor,
+    obtenerDetalleSolicitudProveedor
 } = require('../controllers/solicitudes.controller');
-const { validarJWT, esCliente } = require('../middlewares/validar-jwt');
+const { validarJWT, esCliente, esProveedor } = require('../middlewares/validar-jwt');
 const { validarCampos } = require('../middlewares/validar-campos');
 
 const router = Router();
@@ -15,12 +17,18 @@ router.get('/mias', [
     esCliente
 ], obtenerMisSolicitudes);
 
-router.get('/:id', [
+
+router.get('/recibidas', [
     validarJWT,
-    esCliente,
+    esProveedor
+], obtenerSolicitudesProveedor);
+
+router.get('/recibidas/:id', [
+    validarJWT,
+    esProveedor,
     check('id', 'El ID de la solicitud debe ser entero').isInt(),
     validarCampos
-], obtenerDetalleSolicitudCliente);
+], obtenerDetalleSolicitudProveedor);
 
 router.post('/', [
     validarJWT,
@@ -32,5 +40,12 @@ router.post('/', [
     check('direccion_atencion', 'La dirección del domicilio es obligatoria').trim().not().isEmpty(),
     validarCampos
 ], crearSolicitud);
+
+router.get('/:id', [
+    validarJWT,
+    esCliente,
+    check('id', 'El ID de la solicitud debe ser entero').isInt(),
+    validarCampos
+], obtenerDetalleSolicitudCliente);
 
 module.exports = router;
