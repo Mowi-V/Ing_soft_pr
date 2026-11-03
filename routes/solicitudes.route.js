@@ -8,6 +8,9 @@ const {
     obtenerDetalleSolicitudProveedor
 } = require('../controllers/solicitudes.controller');
 const { validarJWT, esCliente, esProveedor } = require('../middlewares/validar-jwt');
+    obtenerDetalleSolicitudCliente 
+} = require('../controllers/solicitudes.controller');
+const { validarJWT, esCliente } = require('../middlewares/validar-jwt');
 const { validarCampos } = require('../middlewares/validar-campos');
 
 const router = Router();
@@ -29,6 +32,12 @@ router.get('/recibidas/:id', [
     check('id', 'El ID de la solicitud debe ser entero').isInt(),
     validarCampos
 ], obtenerDetalleSolicitudProveedor);
+router.get('/:id', [
+    validarJWT,
+    esCliente,
+    check('id', 'El ID de la solicitud debe ser entero').isInt(),
+    validarCampos
+], obtenerDetalleSolicitudCliente);
 
 router.post('/', [
     validarJWT,
