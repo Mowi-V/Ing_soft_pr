@@ -9,7 +9,7 @@ const convertirAMinutos = (horaStr) => {
     return h * 60 + m;
 };
 
-
+// HU-011: Obtener disponibilidad propia
 const obtenerMiDisponibilidad = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
 
@@ -38,7 +38,7 @@ const obtenerMiDisponibilidad = async (req, res) => {
     }
 };
 
-
+// HU-011: Consulta pública para el Cliente
 const obtenerDisponibilidadProveedor = async (req, res) => {
     const { id_proveedor } = req.params;
 
@@ -66,7 +66,7 @@ const obtenerDisponibilidadProveedor = async (req, res) => {
     }
 };
 
-
+// HU-011: Registrar franja semanal (soporta jornada partida)
 const agregarFranjaDisponibilidad = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
     const { dia, hora_inicio, hora_fin } = req.body;
@@ -115,7 +115,7 @@ const agregarFranjaDisponibilidad = async (req, res) => {
     }
 };
 
-
+// HU-011: Eliminar franja semanal
 const eliminarFranjaDisponibilidad = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
     const { id } = req.params;
@@ -143,7 +143,7 @@ const eliminarFranjaDisponibilidad = async (req, res) => {
     }
 };
 
-
+// HU-011: Registrar periodo no disponible (usa PK `id` sin motivo)
 const agregarPeriodoNoDisponible = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
     const { fecha_inicio, fecha_fin } = req.body;
@@ -172,7 +172,7 @@ const agregarPeriodoNoDisponible = async (req, res) => {
     }
 };
 
-
+// HU-011: Eliminar periodo no disponible (usa PK `id`)
 const eliminarPeriodoNoDisponible = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
     const { id } = req.params;
