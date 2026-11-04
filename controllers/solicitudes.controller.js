@@ -155,7 +155,6 @@ const crearSolicitud = async (req, res) => {
     }
 };
 
-
 const obtenerMisSolicitudes = async (req, res) => {
     const { id_usuario: id_cliente } = req.usuarioAutenticado;
     const { estado } = req.query;
@@ -234,7 +233,6 @@ const obtenerDetalleSolicitudCliente = async (req, res) => {
             return res.status(404).json({ msg: 'Solicitud no encontrada' });
         }
 
-       
         if (solicitud.id_cliente !== id_cliente) {
             return res.status(403).json({ msg: 'No tienes autorización para consultar esta solicitud' });
         }
@@ -350,8 +348,4 @@ module.exports = {
     obtenerDetalleSolicitudCliente,
     obtenerSolicitudesProveedor,
     obtenerDetalleSolicitudProveedor
-module.exports = {
-    crearSolicitud,
-    obtenerMisSolicitudes,
-    obtenerDetalleSolicitudCliente
 };
