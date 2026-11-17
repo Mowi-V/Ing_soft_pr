@@ -7,7 +7,8 @@ const {
     obtenerSolicitudesProveedor,
     obtenerDetalleSolicitudProveedor,
     aceptarSolicitud,
-    rechazarSolicitud
+    rechazarSolicitud,
+    contraproponerSolicitud
 } = require('../controllers/solicitudes.controller');
 const { validarJWT, esCliente, esProveedor } = require('../middlewares/validar-jwt');
 const { validarCampos } = require('../middlewares/validar-campos');
@@ -58,6 +59,15 @@ router.patch('/:id/rechazar', [
     check('motivo_rechazo_cancelacion', 'El motivo del rechazo no puede exceder los 255 caracteres').trim().isLength({ max: 255 }),
     validarCampos
 ], rechazarSolicitud);
+
+router.patch('/:id/contraproponer', [
+    validarJWT,
+    esProveedor,
+    check('id', 'El ID de la solicitud debe ser entero').isInt(),
+    check('fecha_hora_sugerida', 'La nueva fecha y hora sugerida es obligatoria (YYYY-MM-DDTHH:mm)')
+        .matches(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$/),
+    validarCampos
+], contraproponerSolicitud);
 
 router.get('/:id', [
     validarJWT,

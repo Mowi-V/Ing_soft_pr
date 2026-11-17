@@ -611,6 +611,87 @@ const rechazarSolicitud = async (req, res) => {
     }
 };
 
+/**
+ * HU-017: Contrapropuesta de nueva fecha y hora por el proveedor.
+ * Valida que la solicitud pertenezca al proveedor y esté en estado 'P', que la fecha sugerida
+ * sea futura (RN-10), quepa en disponibilidad sin bloqueos ni cruces con reservas 'A' (RN-11).
+ */
+const contraproponerSolicitud = async (req, res) => {
+    const { id_usuario: id_proveedor } = req.usuarioAutenticado;
+    const { id } = req.params;
+    const { fecha_hora_sugerida } = req.body;
+
+    const fechaParseada = parsearFechaHoraSolicitud(fecha_hora_sugerida);
+    if (!fechaParseada) {
+        return res.status(400).json({
+            msg: 'Formato de fecha sugerida inválido. Utilice YYYY-MM-DDTHH:mm o YYYY-MM-DD HH:mm'
+        });
+    }
+
+    const t = await bdMySQL.transaction();
+
+    try {
+        const solicitud = await Solicitud.findByPk(id, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (!solicitud) {
+            await t.rollback();
+            return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
+        }
+
+        if (solicitud.id_proveedor !== id_proveedor) {
+            await t.rollback();
+            return res.status(403).json({ msg: 'No tienes autorización para contraproponer esta solicitud' });
+        }
+
+        if (solicitud.estado !== 'P') {
+            await t.rollback();
+            return res.status(409).json({
+                msg: `Solo se puede proponer otro horario sobre solicitudes en estado Pendiente (estado actual: '${solicitud.estado}')`
+            });
+        }
+
+        const validacionAgenda = await validarDisponibilidadAgenda({
+            id_proveedor,
+            fechaParte: fechaParseada.fechaParte,
+            horaParte: fechaParseada.horaParte,
+            hora: fechaParseada.hora,
+            minuto: fechaParseada.minuto,
+            fechaLocal: fechaParseada.fechaLocal,
+            duracionMin: solicitud.duracion_minutos_c,
+            excluirSolicitudId: solicitud.id_solicitud,
+            transaction: t
+        });
+
+        if (!validacionAgenda.ok) {
+            await t.rollback();
+            return res.status(validacionAgenda.status).json({ msg: validacionAgenda.msg });
+        }
+
+        await solicitud.update({
+            fecha_hora_sugerida: fechaParseada.fechaHoraBD,
+            estado: 'S',
+            fecha_ultima_actualizacion: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+
+        return res.json({
+            ok: true,
+            msg: 'Contrapropuesta de horario enviada al cliente',
+            solicitud
+        });
+    } catch (error) {
+        if (!t.finished) {
+            await t.rollback();
+        }
+        console.error('Error al contraproponer horario:', error);
+        return res.status(500).json({ msg: 'Error interno al registrar la contrapropuesta' });
+    }
+};
+
 module.exports = {
     crearSolicitud,
     obtenerMisSolicitudes,
@@ -618,5 +699,6 @@ module.exports = {
     obtenerSolicitudesProveedor,
     obtenerDetalleSolicitudProveedor,
     aceptarSolicitud,
-    rechazarSolicitud
+    rechazarSolicitud,
+    contraproponerSolicitud
 };
