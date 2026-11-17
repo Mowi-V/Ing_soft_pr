@@ -9,7 +9,9 @@ const {
     aceptarSolicitud,
     rechazarSolicitud,
     contraproponerSolicitud,
-    responderContrapropuesta
+    responderContrapropuesta,
+    cancelarSolicitud,
+    finalizarSolicitud
 } = require('../controllers/solicitudes.controller');
 const { validarJWT, esCliente, esProveedor } = require('../middlewares/validar-jwt');
 const { validarCampos } = require('../middlewares/validar-campos');
@@ -82,6 +84,21 @@ router.patch('/:id/responder-contrapropuesta', [
         .isLength({ max: 255 }).withMessage('El motivo no puede exceder los 255 caracteres'),
     validarCampos
 ], responderContrapropuesta);
+
+router.patch('/:id/cancelar', [
+    validarJWT,
+    check('id', 'El ID de la solicitud debe ser entero').isInt(),
+    check('motivo_rechazo_cancelacion', 'El motivo de cancelación es obligatorio').trim().not().isEmpty(),
+    check('motivo_rechazo_cancelacion', 'El motivo de cancelación no puede exceder los 255 caracteres').trim().isLength({ max: 255 }),
+    validarCampos
+], cancelarSolicitud);
+
+router.patch('/:id/finalizar', [
+    validarJWT,
+    esProveedor,
+    check('id', 'El ID de la solicitud debe ser entero').isInt(),
+    validarCampos
+], finalizarSolicitud);
 
 router.get('/:id', [
     validarJWT,

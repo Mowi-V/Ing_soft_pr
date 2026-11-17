@@ -814,6 +814,116 @@ const responderContrapropuesta = async (req, res) => {
     }
 };
 
+/**
+ * HU-019: Cancelación de una solicitud o reserva activa ('P', 'S' o 'A')
+ * por parte del cliente o proveedor asociado, exigiendo motivo obligatorio y liberando agenda si estaba en 'A'.
+ */
+const cancelarSolicitud = async (req, res) => {
+    const { id_usuario } = req.usuarioAutenticado;
+    const { id } = req.params;
+    const { motivo_rechazo_cancelacion } = req.body;
+
+    const t = await bdMySQL.transaction();
+
+    try {
+        const solicitud = await Solicitud.findByPk(id, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (!solicitud) {
+            await t.rollback();
+            return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
+        }
+
+        if (solicitud.id_cliente !== id_usuario && solicitud.id_proveedor !== id_usuario) {
+            await t.rollback();
+            return res.status(403).json({ msg: 'No tienes autorización para cancelar esta solicitud' });
+        }
+
+        if (!['P', 'S', 'A'].includes(solicitud.estado)) {
+            await t.rollback();
+            return res.status(409).json({
+                msg: `Solo se pueden cancelar solicitudes en estado Pendiente, Sugerida o Aceptada (estado actual: '${solicitud.estado}')`
+            });
+        }
+
+        await solicitud.update({
+            estado: 'C',
+            motivo_rechazo_cancelacion: motivo_rechazo_cancelacion.trim(),
+            fecha_ultima_actualizacion: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+
+        return res.json({
+            ok: true,
+            msg: 'Solicitud cancelada correctamente',
+            solicitud
+        });
+    } catch (error) {
+        if (!t.finished) {
+            await t.rollback();
+        }
+        console.error('Error al cancelar solicitud:', error);
+        return res.status(500).json({ msg: 'Error interno al cancelar la solicitud' });
+    }
+};
+
+/**
+ * HU-020: Finalización de un servicio prestado ('A' -> 'F') por parte del proveedor asignado.
+ * Utiliza transacción ACID con bloqueo pesimista para evitar condiciones de carrera con cancelaciones (HU-019).
+ */
+const finalizarSolicitud = async (req, res) => {
+    const { id_usuario: id_proveedor } = req.usuarioAutenticado;
+    const { id } = req.params;
+
+    const t = await bdMySQL.transaction();
+
+    try {
+        const solicitud = await Solicitud.findByPk(id, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (!solicitud) {
+            await t.rollback();
+            return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
+        }
+
+        if (solicitud.id_proveedor !== id_proveedor) {
+            await t.rollback();
+            return res.status(403).json({ msg: 'No tienes autorización para finalizar esta solicitud' });
+        }
+
+        if (solicitud.estado !== 'A') {
+            await t.rollback();
+            return res.status(409).json({
+                msg: `Solo se pueden finalizar reservas en estado Aceptada (estado actual: '${solicitud.estado}')`
+            });
+        }
+
+        await solicitud.update({
+            estado: 'F',
+            fecha_ultima_actualizacion: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+
+        return res.json({
+            ok: true,
+            msg: 'Servicio marcado como finalizado correctamente',
+            solicitud
+        });
+    } catch (error) {
+        if (!t.finished) {
+            await t.rollback();
+        }
+        console.error('Error al finalizar solicitud:', error);
+        return res.status(500).json({ msg: 'Error interno al finalizar la solicitud' });
+    }
+};
+
 module.exports = {
     crearSolicitud,
     obtenerMisSolicitudes,
@@ -823,5 +933,7 @@ module.exports = {
     aceptarSolicitud,
     rechazarSolicitud,
     contraproponerSolicitud,
-    responderContrapropuesta
+    responderContrapropuesta,
+    cancelarSolicitud,
+    finalizarSolicitud
 };
