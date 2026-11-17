@@ -30,7 +30,7 @@ const crearSolicitud = async (req, res) => {
         if (!servicio) {
             return res.status(404).json({ msg: 'El servicio solicitado no existe' });
         }
-
+        console.log("\n" + fecha_hora_solicitada + "\n");
         if (servicio.estado !== 'A') {
             return res.status(400).json({ msg: 'El servicio no se encuentra activo para nuevas solicitudes' });
         }
@@ -42,15 +42,30 @@ const crearSolicitud = async (req, res) => {
             return res.status(400).json({ msg: 'El barrio seleccionado no es válido en el sistema' });
         }
 
-        const [fechaParte, horaParte] = fecha_hora_solicitada.split('T');
-        if (!fechaParte || !horaParte) {
-            return res.status(400).json({ msg: 'Formato de fecha inválido. Utilice YYYY-MM-DDTHH:mm' });
+        const separador = fecha_hora_solicitada.includes('T') ? 'T' : ' ';
+        const [fechaParte, rawHoraParte] = fecha_hora_solicitada.split(separador);
+
+        if (!fechaParte || !rawHoraParte) {
+            return res.status(400).json({ msg: 'Formato de fecha inválido. Utilice YYYY-MM-DDTHH:mm o YYYY-MM-DD HH:mm' });
         }
 
         const [anio, mes, diaNum] = fechaParte.split('-').map(Number);
-        const [hora, minuto] = horaParte.split(':').map(Number);
-        const fechaSolicitada = new Date(anio, mes - 1, diaNum, hora, minuto);
+        const horaLimpia = rawHoraParte.replace('Z', '').split(':');
+        const hora = parseInt(horaLimpia[0], 10);
+        const minuto = parseInt(horaLimpia[1], 10);
 
+        if (isNaN(hora) || isNaN(minuto)) {
+            return res.status(400).json({ msg: 'Los valores de hora y minuto no son válidos' });
+        }
+
+        // Cadena SQL estandarizada (YYYY-MM-DD HH:mm:00) para persistir el valor literal exacto en MySQL
+        const fechaHoraBD = `${fechaParte} ${String(hora).padStart(2, '0')}:${String(minuto).padStart(2, '0')}:00`;
+
+        // Instancia local únicamente para cálculos de día de semana y validación de futuro
+        const fechaSolicitada = new Date(anio, mes - 1, diaNum, hora, minuto, 0);
+
+        console.log("\n" + fechaHoraBD+ "\n");
+        console.log("\n" + fechaSolicitada+ "\n");
         if (fechaSolicitada <= new Date()) {
             return res.status(400).json({ msg: 'La fecha y hora solicitada debe ser estrictamente futura' });
         }
@@ -122,6 +137,32 @@ const crearSolicitud = async (req, res) => {
             });
         }
 
+        
+        const solicitudesActivasCliente = await Solicitud.findAll({
+            where: {
+                id_cliente,
+                id_servicio: servicio.id_servicio,
+                estado: ['P', 'S'] // Pendientes o con contrapropuesta activa
+            }
+        });
+
+        const existeSolicitudEnRango = solicitudesActivasCliente.some(s => {
+            const sBase = s.fecha_hora_sugerida
+                ? new Date(s.fecha_hora_sugerida)
+                : new Date(s.fecha_hora_solicitada);
+            const sInicioMs = sBase.getTime();
+            const sDuracion = s.duracion_minutos_c || duracionMin;
+            const sFinMs = sInicioMs + (sDuracion * 60 * 1000);
+
+            return (nuevaInicioMs < sFinMs && nuevaFinMs > sInicioMs);
+        });
+
+        if (existeSolicitudEnRango) {
+            return res.status(409).json({
+                msg: 'Ya tienes una solicitud activa para este servicio cuyo horario se cruza con el rango solicitado'
+            });
+        }
+
         const ahora = new Date();
         const nuevaSolicitud = await Solicitud.create({
             id_cliente,
@@ -131,7 +172,7 @@ const crearSolicitud = async (req, res) => {
             nombre_servicio_c: servicio.nombre,
             precio_c: servicio.precio,
             duracion_minutos_c: servicio.duracion_minutos,
-            fecha_hora_solicitada: fechaSolicitada,
+            fecha_hora_solicitada: fechaHoraBD, // <--- Se asigna la cadena literal para evitar alteraciones UTC
             fecha_hora_sugerida: null,
             direccion_atencion: direccion_atencion.trim(),
             barrio_sector: barrioEncontrado.nombre,

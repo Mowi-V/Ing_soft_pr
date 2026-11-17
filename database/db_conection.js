@@ -8,7 +8,9 @@ const bdMySQL = new Sequelize(
     {
         host: 'iriguchi.proxy.rlwy.net',
         port: '43944',
-        dialect: 'mysql'
+        dialect: 'mysql',
+        timezone: '-05:00',
+        
     }
 );
 
