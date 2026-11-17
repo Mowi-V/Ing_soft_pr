@@ -65,6 +65,30 @@ const parsearFechaHoraSolicitud = (fechaHoraStr) => {
 };
 
 /**
+ * Convierte un Date (o string SQL/ISO) almacenado en BD a 'YYYY-MM-DD HH:mm' en hora de Colombia (UTC-5).
+ */
+const formatearFechaHoraDesdeBD = (valor) => {
+    if (!valor) return null;
+    if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
+        const partes = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/Bogota',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23'
+        }).formatToParts(valor);
+
+        const mapa = Object.fromEntries(partes.map(p => [p.type, p.value]));
+        return `${mapa.year}-${mapa.month}-${mapa.day} ${mapa.hour}:${mapa.minute}`;
+    }
+    const str = String(valor).trim();
+    const match = str.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+    return match ? `${match[1]} ${match[2]}` : null;
+};
+
+/**
  * Valida reglas RN-10 (fecha futura) y RN-11 (bloqueos, franjas semanales y no solapamiento con citas 'A').
  * Retorna { ok: true, nuevaInicioMs, nuevaFinMs } o { ok: false, status, msg }.
  */
@@ -460,10 +484,96 @@ const obtenerDetalleSolicitudProveedor = async (req, res) => {
     }
 };
 
+/**
+ * HU-015: Aceptación de una solicitud pendiente por el proveedor dentro de una transacción ACID.
+ * Adquiere bloqueo pesimista por proveedor y solicitud para impedir dobles reservas concurrentes (RN-11, RN-12).
+ */
+const aceptarSolicitud = async (req, res) => {
+    const { id_usuario: id_proveedor } = req.usuarioAutenticado;
+    const { id } = req.params;
+
+    const t = await bdMySQL.transaction();
+
+    try {
+        // Serializa mutaciones de agenda para este proveedor durante la transacción ACID
+        await Proveedor.findByPk(id_proveedor, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        const solicitud = await Solicitud.findByPk(id, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (!solicitud) {
+            await t.rollback();
+            return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
+        }
+
+        if (solicitud.id_proveedor !== id_proveedor) {
+            await t.rollback();
+            return res.status(403).json({ msg: 'No tienes autorización para aceptar esta solicitud' });
+        }
+
+        if (solicitud.estado !== 'P') {
+            await t.rollback();
+            return res.status(409).json({
+                msg: `Solo se pueden aceptar solicitudes en estado Pendiente (estado actual: '${solicitud.estado}')`
+            });
+        }
+
+        const fechaHoraStr = formatearFechaHoraDesdeBD(solicitud.fecha_hora_solicitada);
+        const fechaParseada = parsearFechaHoraSolicitud(fechaHoraStr);
+
+        if (!fechaParseada) {
+            await t.rollback();
+            return res.status(409).json({ msg: 'La fecha solicitada de la orden no es válida para confirmar' });
+        }
+
+        const validacionAgenda = await validarDisponibilidadAgenda({
+            id_proveedor,
+            fechaParte: fechaParseada.fechaParte,
+            horaParte: fechaParseada.horaParte,
+            hora: fechaParseada.hora,
+            minuto: fechaParseada.minuto,
+            fechaLocal: fechaParseada.fechaLocal,
+            duracionMin: solicitud.duracion_minutos_c,
+            excluirSolicitudId: solicitud.id_solicitud,
+            transaction: t
+        });
+
+        if (!validacionAgenda.ok) {
+            await t.rollback();
+            return res.status(409).json({ msg: validacionAgenda.msg });
+        }
+
+        await solicitud.update({
+            estado: 'A',
+            fecha_ultima_actualizacion: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+
+        return res.json({
+            ok: true,
+            msg: 'Solicitud aceptada y confirmada en tu agenda',
+            solicitud
+        });
+    } catch (error) {
+        if (!t.finished) {
+            await t.rollback();
+        }
+        console.error('Error al aceptar solicitud:', error);
+        return res.status(500).json({ msg: 'Error interno al aceptar la solicitud' });
+    }
+};
+
 module.exports = {
     crearSolicitud,
     obtenerMisSolicitudes,
     obtenerDetalleSolicitudCliente,
     obtenerSolicitudesProveedor,
-    obtenerDetalleSolicitudProveedor
+    obtenerDetalleSolicitudProveedor,
+    aceptarSolicitud
 };
