@@ -49,8 +49,8 @@ const solicitarRecuperacion = async (req, res) => {
             usado: 0
         });
 
-        const enlaceRecuperacion = `https://ing-soft-pr.onrender.com/restablecer-password?token=${token}`;
-        console.log(enlaceRecuperacion);
+        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        const enlaceRecuperacion = `${frontendUrl}/restablecer-password?token=${token}`;
         const mailOptions = {
             from: `"Soporte Bienestar en Casa" <${process.env.EMAIL_USER}>`, 
             to: correo_electronico, 

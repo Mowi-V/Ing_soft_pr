@@ -1,3 +1,4 @@
+const { bdMySQL } = require('../database/db_conection');
 const Solicitud = require('../models/solicitud');
 const Servicio = require('../models/servicio');
 const Proveedor = require('../models/proveedor');
@@ -8,10 +9,157 @@ const Comuna = require('../models/comuna');
 const Disponibilidad = require('../models/disponibilidad');
 const PeriodoNoDisponible = require('../models/periodoNoDisponible');
 
+const DIAS_SEMANA = ['DO', 'LU', 'MA', 'MI', 'JU', 'VI', 'SA'];
+
 const convertirAMinutos = (horaStr) => {
     if (!horaStr) return 0;
     const [h, m] = horaStr.split(':').map(Number);
     return h * 60 + m;
+};
+
+/**
+ * Convierte un Date o string SQL/ISO a 'YYYY-MM-DD' en zona horaria de Colombia (UTC-5).
+ * Evita el error de hacer String(Date).slice(0, 10), que devolvía "Mon Nov 16".
+ */
+const obtenerFechaYMD = (valor) => {
+    if (!valor) return '';
+    if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
+        return new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/Bogota',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).format(valor);
+    }
+    const str = String(valor).trim();
+    const match = str.match(/^\d{4}-\d{2}-\d{2}/);
+    return match ? match[0] : '';
+};
+
+/**
+ * Parsea una fecha/hora enviada como 'YYYY-MM-DDTHH:mm' o 'YYYY-MM-DD HH:mm'.
+ */
+const parsearFechaHoraSolicitud = (fechaHoraStr) => {
+    if (!fechaHoraStr || typeof fechaHoraStr !== 'string') return null;
+
+    const separador = fechaHoraStr.includes('T') ? 'T' : ' ';
+    const [fechaParte, rawHoraParte] = fechaHoraStr.split(separador);
+    if (!fechaParte || !rawHoraParte) return null;
+
+    const [anio, mes, diaNum] = fechaParte.split('-').map(Number);
+    const horaLimpia = rawHoraParte.replace('Z', '').split(':');
+    const hora = parseInt(horaLimpia[0], 10);
+    const minuto = parseInt(horaLimpia[1], 10);
+
+    if ([anio, mes, diaNum, hora, minuto].some(Number.isNaN)) {
+        return null;
+    }
+
+    const horaStr = `${String(hora).padStart(2, '0')}:${String(minuto).padStart(2, '0')}`;
+    const fechaHoraBD = `${fechaParte} ${horaStr}:00`;
+    const fechaLocal = new Date(anio, mes - 1, diaNum, hora, minuto, 0);
+
+    if (Number.isNaN(fechaLocal.getTime())) return null;
+
+    return { fechaParte, horaParte: horaStr, hora, minuto, fechaHoraBD, fechaLocal };
+};
+
+/**
+ * Valida reglas RN-10 (fecha futura) y RN-11 (bloqueos, franjas semanales y no solapamiento con citas 'A').
+ * Retorna { ok: true, nuevaInicioMs, nuevaFinMs } o { ok: false, status, msg }.
+ */
+const validarDisponibilidadAgenda = async ({
+    id_proveedor,
+    fechaParte,
+    horaParte,
+    hora,
+    minuto,
+    fechaLocal,
+    duracionMin,
+    excluirSolicitudId = null,
+    transaction = null
+}) => {
+    if (fechaLocal <= new Date()) {
+        return { ok: false, status: 400, msg: 'La fecha y hora solicitada debe ser estrictamente futura' };
+    }
+
+    const queryOpts = transaction ? { transaction } : {};
+
+    const periodosBloqueados = await PeriodoNoDisponible.findAll({
+        where: { id_proveedor },
+        ...queryOpts
+    });
+
+    const estaBloqueado = periodosBloqueados.some(p => {
+        const fIniStr = obtenerFechaYMD(p.fecha_inicio);
+        const fFinStr = obtenerFechaYMD(p.fecha_fin);
+        return Boolean(fIniStr && fFinStr && fechaParte >= fIniStr && fechaParte <= fFinStr);
+    });
+
+    if (estaBloqueado) {
+        return {
+            ok: false,
+            status: 409,
+            msg: 'El profesional no se encuentra disponible en la fecha seleccionada (periodo de descanso o bloqueo)'
+        };
+    }
+
+    const diaCod = DIAS_SEMANA[fechaLocal.getDay()];
+    const franjasDisponibles = await Disponibilidad.findAll({
+        where: { id_proveedor, dia: diaCod },
+        ...queryOpts
+    });
+
+    if (franjasDisponibles.length === 0) {
+        return {
+            ok: false,
+            status: 409,
+            msg: `El profesional no atiende los días ${diaCod} según su disponibilidad habitual`
+        };
+    }
+
+    const minutosInicio = hora * 60 + minuto;
+    const minutosFin = minutosInicio + duracionMin;
+
+    const cabeEnJornada = franjasDisponibles.some(f => {
+        const fInicio = convertirAMinutos(f.hora_inicio);
+        const fFin = convertirAMinutos(f.hora_fin);
+        return (minutosInicio >= fInicio && minutosFin <= fFin);
+    });
+
+    if (!cabeEnJornada) {
+        return {
+            ok: false,
+            status: 409,
+            msg: `El horario solicitado (${horaParte} - duración ${duracionMin} min) excede las franjas de atención del profesional para este día`
+        };
+    }
+
+    const reservasAceptadas = await Solicitud.findAll({
+        where: { id_proveedor, estado: 'A' },
+        ...queryOpts
+    });
+
+    const nuevaInicioMs = fechaLocal.getTime();
+    const nuevaFinMs = nuevaInicioMs + (duracionMin * 60 * 1000);
+
+    const colisiona = reservasAceptadas.some(r => {
+        if (excluirSolicitudId && r.id_solicitud === excluirSolicitudId) return false;
+        const rBase = r.fecha_hora_sugerida ? new Date(r.fecha_hora_sugerida) : new Date(r.fecha_hora_solicitada);
+        const rInicioMs = rBase.getTime();
+        const rFinMs = rInicioMs + (r.duracion_minutos_c * 60 * 1000);
+        return (nuevaInicioMs < rFinMs && nuevaFinMs > rInicioMs);
+    });
+
+    if (colisiona) {
+        return {
+            ok: false,
+            status: 409,
+            msg: 'El horario solicitado colisiona con otra reserva previamente confirmada del profesional'
+        };
+    }
+
+    return { ok: true, nuevaInicioMs, nuevaFinMs };
 };
 
 const crearSolicitud = async (req, res) => {
@@ -30,7 +178,7 @@ const crearSolicitud = async (req, res) => {
         if (!servicio) {
             return res.status(404).json({ msg: 'El servicio solicitado no existe' });
         }
-        console.log("\n" + fecha_hora_solicitada + "\n");
+
         if (servicio.estado !== 'A') {
             return res.status(400).json({ msg: 'El servicio no se encuentra activo para nuevas solicitudes' });
         }
@@ -42,102 +190,31 @@ const crearSolicitud = async (req, res) => {
             return res.status(400).json({ msg: 'El barrio seleccionado no es válido en el sistema' });
         }
 
-        const separador = fecha_hora_solicitada.includes('T') ? 'T' : ' ';
-        const [fechaParte, rawHoraParte] = fecha_hora_solicitada.split(separador);
-
-        if (!fechaParte || !rawHoraParte) {
+        const fechaParseada = parsearFechaHoraSolicitud(fecha_hora_solicitada);
+        if (!fechaParseada) {
             return res.status(400).json({ msg: 'Formato de fecha inválido. Utilice YYYY-MM-DDTHH:mm o YYYY-MM-DD HH:mm' });
         }
 
-        const [anio, mes, diaNum] = fechaParte.split('-').map(Number);
-        const horaLimpia = rawHoraParte.replace('Z', '').split(':');
-        const hora = parseInt(horaLimpia[0], 10);
-        const minuto = parseInt(horaLimpia[1], 10);
-
-        if (isNaN(hora) || isNaN(minuto)) {
-            return res.status(400).json({ msg: 'Los valores de hora y minuto no son válidos' });
-        }
-
-        // Cadena SQL estandarizada (YYYY-MM-DD HH:mm:00) para persistir el valor literal exacto en MySQL
-        const fechaHoraBD = `${fechaParte} ${String(hora).padStart(2, '0')}:${String(minuto).padStart(2, '0')}:00`;
-
-        // Instancia local únicamente para cálculos de día de semana y validación de futuro
-        const fechaSolicitada = new Date(anio, mes - 1, diaNum, hora, minuto, 0);
-
-        console.log("\n" + fechaHoraBD+ "\n");
-        console.log("\n" + fechaSolicitada+ "\n");
-        if (fechaSolicitada <= new Date()) {
-            return res.status(400).json({ msg: 'La fecha y hora solicitada debe ser estrictamente futura' });
-        }
-
+        const { fechaParte, horaParte, hora, minuto, fechaHoraBD, fechaLocal } = fechaParseada;
         const id_proveedor = servicio.id_proveedor;
-
-        const periodosBloqueados = await PeriodoNoDisponible.findAll({
-            where: { id_proveedor }
-        });
-
-        const estaBloqueado = periodosBloqueados.some(p => {
-            const fIniStr = String(p.fecha_inicio).slice(0, 10);
-            const fFinStr = String(p.fecha_fin).slice(0, 10);
-            return (fechaParte >= fIniStr && fechaParte <= fFinStr);
-        });
-
-        if (estaBloqueado) {
-            return res.status(409).json({
-                msg: 'El profesional no se encuentra disponible en la fecha seleccionada (periodo de descanso o bloqueo)'
-            });
-        }
-
-        const diasSemanaMap = ['DO', 'LU', 'MA', 'MI', 'JU', 'VI', 'SA'];
-        const diaCod = diasSemanaMap[fechaSolicitada.getDay()];
-
-        const franjasDisponibles = await Disponibilidad.findAll({
-            where: { id_proveedor, dia: diaCod }
-        });
-
-        if (franjasDisponibles.length === 0) {
-            return res.status(409).json({
-                msg: `El profesional no atiende los días ${diaCod} según su disponibilidad habitual`
-            });
-        }
-
         const duracionMin = servicio.duracion_minutos;
-        const minutosInicio = hora * 60 + minuto;
-        const minutosFin = minutosInicio + duracionMin;
 
-        const cabeEnJornada = franjasDisponibles.some(f => {
-            const fInicio = convertirAMinutos(f.hora_inicio);
-            const fFin = convertirAMinutos(f.hora_fin);
-            return (minutosInicio >= fInicio && minutosFin <= fFin);
+        const validacionAgenda = await validarDisponibilidadAgenda({
+            id_proveedor,
+            fechaParte,
+            horaParte,
+            hora,
+            minuto,
+            fechaLocal,
+            duracionMin
         });
 
-        if (!cabeEnJornada) {
-            return res.status(409).json({
-                msg: `El horario solicitado (${horaParte} - duración ${duracionMin} min) excede las franjas de atención del profesional para este día`
-            });
+        if (!validacionAgenda.ok) {
+            return res.status(validacionAgenda.status).json({ msg: validacionAgenda.msg });
         }
 
-        const reservasAceptadas = await Solicitud.findAll({
-            where: { id_proveedor, estado: 'A' }
-        });
+        const { nuevaInicioMs, nuevaFinMs } = validacionAgenda;
 
-        const nuevaInicioMs = fechaSolicitada.getTime();
-        const nuevaFinMs = nuevaInicioMs + (duracionMin * 60 * 1000);
-
-        const colisiona = reservasAceptadas.some(r => {
-            const rBase = r.fecha_hora_sugerida ? new Date(r.fecha_hora_sugerida) : new Date(r.fecha_hora_solicitada);
-            const rInicioMs = rBase.getTime();
-            const rFinMs = rInicioMs + (r.duracion_minutos_c * 60 * 1000);
-            return (nuevaInicioMs < rFinMs && nuevaFinMs > rInicioMs);
-        });
-
-        if (colisiona) {
-            return res.status(409).json({
-                msg: 'El horario solicitado colisiona con otra reserva previamente confirmada del profesional'
-            });
-        }
-
-        
         const solicitudesActivasCliente = await Solicitud.findAll({
             where: {
                 id_cliente,
@@ -172,7 +249,7 @@ const crearSolicitud = async (req, res) => {
             nombre_servicio_c: servicio.nombre,
             precio_c: servicio.precio,
             duracion_minutos_c: servicio.duracion_minutos,
-            fecha_hora_solicitada: fechaHoraBD, // <--- Se asigna la cadena literal para evitar alteraciones UTC
+            fecha_hora_solicitada: fechaHoraBD, // Cadena literal para evitar alteraciones UTC
             fecha_hora_sugerida: null,
             direccion_atencion: direccion_atencion.trim(),
             barrio_sector: barrioEncontrado.nombre,
