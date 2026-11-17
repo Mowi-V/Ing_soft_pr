@@ -78,9 +78,8 @@ router.patch('/:id/responder-contrapropuesta', [
     check('id', 'El ID de la solicitud debe ser entero').isInt(),
     check('decision', "La decisión debe ser 'aceptar' o 'rechazar'").isIn(['aceptar', 'rechazar']),
     check('motivo_rechazo_cancelacion')
-        .if((value, { req }) => req.body.decision === 'rechazar')
+        .optional({ values: 'falsy' })
         .trim()
-        .not().isEmpty().withMessage('El motivo es obligatorio al rechazar la contrapropuesta')
         .isLength({ max: 255 }).withMessage('El motivo no puede exceder los 255 caracteres'),
     validarCampos
 ], responderContrapropuesta);

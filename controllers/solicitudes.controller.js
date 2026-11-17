@@ -588,9 +588,9 @@ const rechazarSolicitud = async (req, res) => {
             return res.status(403).json({ msg: 'No tienes autorización para rechazar esta solicitud' });
         }
 
-        if (!['P', 'S'].includes(solicitud.estado)) {
+        if (solicitud.estado !== 'P') {
             return res.status(409).json({
-                msg: `Solo se pueden rechazar solicitudes en estado Pendiente o Sugerida (estado actual: '${solicitud.estado}')`
+                msg: `Solo se pueden rechazar solicitudes en estado Pendiente (estado actual: '${solicitud.estado}')`
             });
         }
 
@@ -747,9 +747,10 @@ const responderContrapropuesta = async (req, res) => {
             }
 
             if (decision === 'rechazar') {
+                const motivoLimpio = motivo_rechazo_cancelacion ? String(motivo_rechazo_cancelacion).trim() : '';
                 await solicitud.update({
                     estado: 'C',
-                    motivo_rechazo_cancelacion: motivo_rechazo_cancelacion.trim(),
+                    motivo_rechazo_cancelacion: motivoLimpio || null,
                     fecha_ultima_actualizacion: new Date()
                 }, { transaction: t });
 
