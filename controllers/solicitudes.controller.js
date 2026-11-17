@@ -692,6 +692,128 @@ const contraproponerSolicitud = async (req, res) => {
     }
 };
 
+/**
+ * HU-018: Respuesta del cliente a la contrapropuesta horaria ('S' -> 'A' o 'S' -> 'C').
+ * Si acepta, revalida disponibilidad y ausencia de solapamientos dentro de una transacción ACID
+ * respetando el orden canónico de bloqueo (PROVEEDOR -> SOLICITUD) y consolida fecha_hora_solicitada.
+ */
+const responderContrapropuesta = async (req, res) => {
+    const { id_usuario: id_cliente } = req.usuarioAutenticado;
+    const { id } = req.params;
+    const { decision, motivo_rechazo_cancelacion } = req.body;
+
+    try {
+        const solicitudPrevia = await Solicitud.findByPk(id);
+
+        if (!solicitudPrevia) {
+            return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
+        }
+
+        if (solicitudPrevia.id_cliente !== id_cliente) {
+            return res.status(403).json({ msg: 'No tienes autorización para responder esta solicitud' });
+        }
+
+        const t = await bdMySQL.transaction();
+
+        try {
+            if (decision === 'aceptar') {
+                // Orden canónico global de bloqueo (PROVEEDOR -> SOLICITUD) para evitar deadlocks con HU-015
+                await Proveedor.findByPk(solicitudPrevia.id_proveedor, {
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+            }
+
+            const solicitud = await Solicitud.findByPk(id, {
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+
+            if (!solicitud) {
+                await t.rollback();
+                return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
+            }
+
+            if (solicitud.id_cliente !== id_cliente) {
+                await t.rollback();
+                return res.status(403).json({ msg: 'No tienes autorización para responder esta solicitud' });
+            }
+
+            if (solicitud.estado !== 'S') {
+                await t.rollback();
+                return res.status(409).json({
+                    msg: `Solo se puede responder a una contrapropuesta cuando está en estado Sugerida (estado actual: '${solicitud.estado}')`
+                });
+            }
+
+            if (decision === 'rechazar') {
+                await solicitud.update({
+                    estado: 'C',
+                    motivo_rechazo_cancelacion: motivo_rechazo_cancelacion.trim(),
+                    fecha_ultima_actualizacion: new Date()
+                }, { transaction: t });
+
+                await t.commit();
+                return res.json({
+                    ok: true,
+                    msg: 'Contrapropuesta rechazada y solicitud cancelada',
+                    solicitud
+                });
+            }
+
+            const fechaSugeridaStr = formatearFechaHoraDesdeBD(solicitud.fecha_hora_sugerida);
+            const fechaParseada = parsearFechaHoraSolicitud(fechaSugeridaStr);
+
+            if (!fechaParseada) {
+                await t.rollback();
+                return res.status(409).json({
+                    msg: 'La fecha sugerida de la contrapropuesta no es válida para confirmar'
+                });
+            }
+
+            const validacionAgenda = await validarDisponibilidadAgenda({
+                id_proveedor: solicitud.id_proveedor,
+                fechaParte: fechaParseada.fechaParte,
+                horaParte: fechaParseada.horaParte,
+                hora: fechaParseada.hora,
+                minuto: fechaParseada.minuto,
+                fechaLocal: fechaParseada.fechaLocal,
+                duracionMin: solicitud.duracion_minutos_c,
+                excluirSolicitudId: solicitud.id_solicitud,
+                transaction: t
+            });
+
+            if (!validacionAgenda.ok) {
+                await t.rollback();
+                return res.status(409).json({ msg: validacionAgenda.msg });
+            }
+
+            await solicitud.update({
+                fecha_hora_solicitada: fechaParseada.fechaHoraBD,
+                fecha_hora_sugerida: null,
+                estado: 'A',
+                fecha_ultima_actualizacion: new Date()
+            }, { transaction: t });
+
+            await t.commit();
+
+            return res.json({
+                ok: true,
+                msg: 'Contrapropuesta aceptada y cita confirmada en tu agenda',
+                solicitud
+            });
+        } catch (errTx) {
+            if (!t.finished) {
+                await t.rollback();
+            }
+            throw errTx;
+        }
+    } catch (error) {
+        console.error('Error al responder contrapropuesta:', error);
+        return res.status(500).json({ msg: 'Error interno al procesar la respuesta a la contrapropuesta' });
+    }
+};
+
 module.exports = {
     crearSolicitud,
     obtenerMisSolicitudes,
@@ -700,5 +822,6 @@ module.exports = {
     obtenerDetalleSolicitudProveedor,
     aceptarSolicitud,
     rechazarSolicitud,
-    contraproponerSolicitud
+    contraproponerSolicitud,
+    responderContrapropuesta
 };
