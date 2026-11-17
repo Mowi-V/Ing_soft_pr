@@ -569,11 +569,54 @@ const aceptarSolicitud = async (req, res) => {
     }
 };
 
+/**
+ * HU-016: Rechazo de una solicitud pendiente o sugerida por el proveedor con motivo obligatorio.
+ */
+const rechazarSolicitud = async (req, res) => {
+    const { id_usuario: id_proveedor } = req.usuarioAutenticado;
+    const { id } = req.params;
+    const { motivo_rechazo_cancelacion } = req.body;
+
+    try {
+        const solicitud = await Solicitud.findByPk(id);
+
+        if (!solicitud) {
+            return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
+        }
+
+        if (solicitud.id_proveedor !== id_proveedor) {
+            return res.status(403).json({ msg: 'No tienes autorización para rechazar esta solicitud' });
+        }
+
+        if (!['P', 'S'].includes(solicitud.estado)) {
+            return res.status(409).json({
+                msg: `Solo se pueden rechazar solicitudes en estado Pendiente o Sugerida (estado actual: '${solicitud.estado}')`
+            });
+        }
+
+        await solicitud.update({
+            estado: 'R',
+            motivo_rechazo_cancelacion: motivo_rechazo_cancelacion.trim(),
+            fecha_ultima_actualizacion: new Date()
+        });
+
+        return res.json({
+            ok: true,
+            msg: 'Solicitud rechazada correctamente',
+            solicitud
+        });
+    } catch (error) {
+        console.error('Error al rechazar solicitud:', error);
+        return res.status(500).json({ msg: 'Error interno al rechazar la solicitud' });
+    }
+};
+
 module.exports = {
     crearSolicitud,
     obtenerMisSolicitudes,
     obtenerDetalleSolicitudCliente,
     obtenerSolicitudesProveedor,
     obtenerDetalleSolicitudProveedor,
-    aceptarSolicitud
+    aceptarSolicitud,
+    rechazarSolicitud
 };

@@ -6,7 +6,8 @@ const {
     obtenerDetalleSolicitudCliente,
     obtenerSolicitudesProveedor,
     obtenerDetalleSolicitudProveedor,
-    aceptarSolicitud
+    aceptarSolicitud,
+    rechazarSolicitud
 } = require('../controllers/solicitudes.controller');
 const { validarJWT, esCliente, esProveedor } = require('../middlewares/validar-jwt');
 const { validarCampos } = require('../middlewares/validar-campos');
@@ -48,6 +49,15 @@ router.patch('/:id/aceptar', [
     check('id', 'El ID de la solicitud debe ser entero').isInt(),
     validarCampos
 ], aceptarSolicitud);
+
+router.patch('/:id/rechazar', [
+    validarJWT,
+    esProveedor,
+    check('id', 'El ID de la solicitud debe ser entero').isInt(),
+    check('motivo_rechazo_cancelacion', 'El motivo del rechazo es obligatorio').trim().not().isEmpty(),
+    check('motivo_rechazo_cancelacion', 'El motivo del rechazo no puede exceder los 255 caracteres').trim().isLength({ max: 255 }),
+    validarCampos
+], rechazarSolicitud);
 
 router.get('/:id', [
     validarJWT,
