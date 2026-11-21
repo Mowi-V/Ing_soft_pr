@@ -925,6 +925,95 @@ const finalizarSolicitud = async (req, res) => {
     }
 };
 
+/**
+ * HU-019: Consulta cronológica de la agenda operativa del proveedor.
+ * Devuelve únicamente reservas confirmadas ('A') con fecha, hora inicio/fin, servicio, cliente y dirección,
+ * junto con los periodos bloqueados (excluyendo solicitudes 'P', 'S', 'R', 'C' y 'F').
+ */
+const obtenerAgendaProveedor = async (req, res) => {
+    const { id_usuario: id_proveedor } = req.usuarioAutenticado;
+
+    try {
+        const [reservasConfirmadas, periodosBloqueados] = await Promise.all([
+            Solicitud.findAll({
+                where: { id_proveedor, estado: 'A' },
+                include: [
+                    {
+                        model: Cliente,
+                        as: 'cliente',
+                        include: [
+                            {
+                                model: Usuario,
+                                attributes: ['id_usuario', 'nombre', 'apellido', 'correo_electronico']
+                            }
+                        ]
+                    },
+                    {
+                        model: Barrio,
+                        as: 'barrio',
+                        attributes: ['id_barrio', 'nombre'],
+                        include: [
+                            { model: Comuna, attributes: ['id_comuna', 'nombre'] }
+                        ]
+                    }
+                ],
+                order: [['fecha_hora_solicitada', 'ASC']]
+            }),
+            PeriodoNoDisponible.findAll({
+                where: { id_proveedor },
+                order: [['fecha_inicio', 'ASC']]
+            })
+        ]);
+
+        const agenda = reservasConfirmadas.map((r) => {
+            const inicioStr = formatearFechaHoraDesdeBD(r.fecha_hora_solicitada) || '';
+            const [fecha = '', hora_inicio = ''] = inicioStr.split(' ');
+
+            const inicioMs = new Date(r.fecha_hora_solicitada).getTime();
+            const finDate = Number.isNaN(inicioMs)
+                ? null
+                : new Date(inicioMs + (Number(r.duracion_minutos_c || 0) * 60 * 1000));
+            const finStr = finDate ? formatearFechaHoraDesdeBD(finDate) || '' : '';
+            const hora_fin = finStr.split(' ')[1] || '';
+
+            return {
+                id_solicitud: r.id_solicitud,
+                estado: r.estado,
+                fecha,
+                hora_inicio,
+                hora_fin,
+                fecha_hora_solicitada: r.fecha_hora_solicitada,
+                nombre_servicio_c: r.nombre_servicio_c,
+                duracion_minutos_c: r.duracion_minutos_c,
+                precio_c: r.precio_c,
+                direccion_atencion: r.direccion_atencion,
+                barrio_sector: r.barrio_sector,
+                comuna: r.barrio?.Comuna?.nombre || null,
+                informacion_complementaria: r.informacion_complementaria,
+                observaciones: r.observaciones,
+                cliente: r.cliente?.Usuario
+                    ? {
+                        id_usuario: r.cliente.Usuario.id_usuario,
+                        nombre: r.cliente.Usuario.nombre,
+                        apellido: r.cliente.Usuario.apellido,
+                        correo_electronico: r.cliente.Usuario.correo_electronico
+                    }
+                    : null
+            };
+        });
+
+        return res.json({
+            ok: true,
+            total_compromisos: agenda.length,
+            agenda,
+            periodos_no_disponibles: periodosBloqueados
+        });
+    } catch (error) {
+        console.error('Error al consultar agenda operativa del proveedor:', error);
+        return res.status(500).json({ msg: 'Error interno al consultar la agenda del proveedor' });
+    }
+};
+
 module.exports = {
     crearSolicitud,
     obtenerMisSolicitudes,
@@ -936,5 +1025,6 @@ module.exports = {
     contraproponerSolicitud,
     responderContrapropuesta,
     cancelarSolicitud,
-    finalizarSolicitud
+    finalizarSolicitud,
+    obtenerAgendaProveedor
 };
