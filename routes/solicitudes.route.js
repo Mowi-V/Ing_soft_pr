@@ -11,7 +11,8 @@ const {
     contraproponerSolicitud,
     responderContrapropuesta,
     cancelarSolicitud,
-    finalizarSolicitud
+    finalizarSolicitud,
+    obtenerAgendaProveedor
 } = require('../controllers/solicitudes.controller');
 const { validarJWT, esCliente, esProveedor } = require('../middlewares/validar-jwt');
 const { validarCampos } = require('../middlewares/validar-campos');
@@ -98,6 +99,11 @@ router.patch('/:id/finalizar', [
     check('id', 'El ID de la solicitud debe ser entero').isInt(),
     validarCampos
 ], finalizarSolicitud);
+
+router.get('/agenda', [
+    validarJWT,
+    esProveedor
+], obtenerAgendaProveedor);
 
 router.get('/:id', [
     validarJWT,
