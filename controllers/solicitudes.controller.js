@@ -8,8 +8,11 @@ const Barrio = require('../models/barrio');
 const Comuna = require('../models/comuna');
 const Disponibilidad = require('../models/disponibilidad');
 const PeriodoNoDisponible = require('../models/periodoNoDisponible');
-
-const DIAS_SEMANA = ['DO', 'LU', 'MA', 'MI', 'JU', 'VI', 'SA'];
+const {
+    obtenerFechaYMDColombia,
+    formatearFechaHoraColombia,
+    parsearFechaHoraColombia
+} = require('../helpers/fechas-colombia');
 
 const convertirAMinutos = (horaStr) => {
     if (!horaStr) return 0;
@@ -18,78 +21,8 @@ const convertirAMinutos = (horaStr) => {
 };
 
 /**
- * Convierte un Date o string SQL/ISO a 'YYYY-MM-DD' en zona horaria de Colombia (UTC-5).
- * Evita el error de hacer String(Date).slice(0, 10), que devolvía "Mon Nov 16".
- */
-const obtenerFechaYMD = (valor) => {
-    if (!valor) return '';
-    if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
-        return new Intl.DateTimeFormat('en-CA', {
-            timeZone: 'America/Bogota',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit'
-        }).format(valor);
-    }
-    const str = String(valor).trim();
-    const match = str.match(/^\d{4}-\d{2}-\d{2}/);
-    return match ? match[0] : '';
-};
-
-/**
- * Parsea una fecha/hora enviada como 'YYYY-MM-DDTHH:mm' o 'YYYY-MM-DD HH:mm'.
- */
-const parsearFechaHoraSolicitud = (fechaHoraStr) => {
-    if (!fechaHoraStr || typeof fechaHoraStr !== 'string') return null;
-
-    const separador = fechaHoraStr.includes('T') ? 'T' : ' ';
-    const [fechaParte, rawHoraParte] = fechaHoraStr.split(separador);
-    if (!fechaParte || !rawHoraParte) return null;
-
-    const [anio, mes, diaNum] = fechaParte.split('-').map(Number);
-    const horaLimpia = rawHoraParte.replace('Z', '').split(':');
-    const hora = parseInt(horaLimpia[0], 10);
-    const minuto = parseInt(horaLimpia[1], 10);
-
-    if ([anio, mes, diaNum, hora, minuto].some(Number.isNaN)) {
-        return null;
-    }
-
-    const horaStr = `${String(hora).padStart(2, '0')}:${String(minuto).padStart(2, '0')}`;
-    const fechaHoraBD = `${fechaParte} ${horaStr}:00`;
-    const fechaLocal = new Date(anio, mes - 1, diaNum, hora, minuto, 0);
-
-    if (Number.isNaN(fechaLocal.getTime())) return null;
-
-    return { fechaParte, horaParte: horaStr, hora, minuto, fechaHoraBD, fechaLocal };
-};
-
-/**
- * Convierte un Date (o string SQL/ISO) almacenado en BD a 'YYYY-MM-DD HH:mm' en hora de Colombia (UTC-5).
- */
-const formatearFechaHoraDesdeBD = (valor) => {
-    if (!valor) return null;
-    if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
-        const partes = new Intl.DateTimeFormat('en-CA', {
-            timeZone: 'America/Bogota',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            hourCycle: 'h23'
-        }).formatToParts(valor);
-
-        const mapa = Object.fromEntries(partes.map(p => [p.type, p.value]));
-        return `${mapa.year}-${mapa.month}-${mapa.day} ${mapa.hour}:${mapa.minute}`;
-    }
-    const str = String(valor).trim();
-    const match = str.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
-    return match ? `${match[1]} ${match[2]}` : null;
-};
-
-/**
  * Valida reglas RN-10 (fecha futura) y RN-11 (bloqueos, franjas semanales y no solapamiento con citas 'A').
+ * Opera siempre en hora oficial de Colombia (America/Bogota, UTC-5), independiente de process.env.TZ.
  * Retorna { ok: true, nuevaInicioMs, nuevaFinMs } o { ok: false, status, msg }.
  */
 const validarDisponibilidadAgenda = async ({
@@ -98,12 +31,13 @@ const validarDisponibilidadAgenda = async ({
     horaParte,
     hora,
     minuto,
-    fechaLocal,
+    diaCod,
+    timestampMs,
     duracionMin,
     excluirSolicitudId = null,
     transaction = null
 }) => {
-    if (fechaLocal <= new Date()) {
+    if (timestampMs <= Date.now()) {
         return { ok: false, status: 400, msg: 'La fecha y hora solicitada debe ser estrictamente futura' };
     }
 
@@ -115,8 +49,8 @@ const validarDisponibilidadAgenda = async ({
     });
 
     const estaBloqueado = periodosBloqueados.some(p => {
-        const fIniStr = obtenerFechaYMD(p.fecha_inicio);
-        const fFinStr = obtenerFechaYMD(p.fecha_fin);
+        const fIniStr = obtenerFechaYMDColombia(p.fecha_inicio);
+        const fFinStr = obtenerFechaYMDColombia(p.fecha_fin);
         return Boolean(fIniStr && fFinStr && fechaParte >= fIniStr && fechaParte <= fFinStr);
     });
 
@@ -128,7 +62,6 @@ const validarDisponibilidadAgenda = async ({
         };
     }
 
-    const diaCod = DIAS_SEMANA[fechaLocal.getDay()];
     const franjasDisponibles = await Disponibilidad.findAll({
         where: { id_proveedor, dia: diaCod },
         ...queryOpts
@@ -164,7 +97,7 @@ const validarDisponibilidadAgenda = async ({
         ...queryOpts
     });
 
-    const nuevaInicioMs = fechaLocal.getTime();
+    const nuevaInicioMs = timestampMs;
     const nuevaFinMs = nuevaInicioMs + (duracionMin * 60 * 1000);
 
     const colisiona = reservasAceptadas.some(r => {
@@ -214,12 +147,12 @@ const crearSolicitud = async (req, res) => {
             return res.status(400).json({ msg: 'El barrio seleccionado no es válido en el sistema' });
         }
 
-        const fechaParseada = parsearFechaHoraSolicitud(fecha_hora_solicitada);
+        const fechaParseada = parsearFechaHoraColombia(fecha_hora_solicitada);
         if (!fechaParseada) {
             return res.status(400).json({ msg: 'Formato de fecha inválido. Utilice YYYY-MM-DDTHH:mm o YYYY-MM-DD HH:mm' });
         }
 
-        const { fechaParte, horaParte, hora, minuto, fechaHoraBD, fechaLocal } = fechaParseada;
+        const { fechaParte, horaParte, hora, minuto, diaCod, timestampMs, fechaUtc } = fechaParseada;
         const id_proveedor = servicio.id_proveedor;
         const duracionMin = servicio.duracion_minutos;
 
@@ -229,7 +162,8 @@ const crearSolicitud = async (req, res) => {
             horaParte,
             hora,
             minuto,
-            fechaLocal,
+            diaCod,
+            timestampMs,
             duracionMin
         });
 
@@ -273,7 +207,7 @@ const crearSolicitud = async (req, res) => {
             nombre_servicio_c: servicio.nombre,
             precio_c: servicio.precio,
             duracion_minutos_c: servicio.duracion_minutos,
-            fecha_hora_solicitada: fechaHoraBD, // Cadena literal para evitar alteraciones UTC
+            fecha_hora_solicitada: fechaUtc, // Date con offset -05:00 para consistencia bajo cualquier TZ del servidor
             fecha_hora_sugerida: null,
             direccion_atencion: direccion_atencion.trim(),
             barrio_sector: barrioEncontrado.nombre,
@@ -523,8 +457,8 @@ const aceptarSolicitud = async (req, res) => {
             });
         }
 
-        const fechaHoraStr = formatearFechaHoraDesdeBD(solicitud.fecha_hora_solicitada);
-        const fechaParseada = parsearFechaHoraSolicitud(fechaHoraStr);
+        const fechaHoraStr = formatearFechaHoraColombia(solicitud.fecha_hora_solicitada);
+        const fechaParseada = parsearFechaHoraColombia(fechaHoraStr);
 
         if (!fechaParseada) {
             await t.rollback();
@@ -537,7 +471,8 @@ const aceptarSolicitud = async (req, res) => {
             horaParte: fechaParseada.horaParte,
             hora: fechaParseada.hora,
             minuto: fechaParseada.minuto,
-            fechaLocal: fechaParseada.fechaLocal,
+            diaCod: fechaParseada.diaCod,
+            timestampMs: fechaParseada.timestampMs,
             duracionMin: solicitud.duracion_minutos_c,
             excluirSolicitudId: solicitud.id_solicitud,
             transaction: t
@@ -621,7 +556,7 @@ const contraproponerSolicitud = async (req, res) => {
     const { id } = req.params;
     const { fecha_hora_sugerida } = req.body;
 
-    const fechaParseada = parsearFechaHoraSolicitud(fecha_hora_sugerida);
+    const fechaParseada = parsearFechaHoraColombia(fecha_hora_sugerida);
     if (!fechaParseada) {
         return res.status(400).json({
             msg: 'Formato de fecha sugerida inválido. Utilice YYYY-MM-DDTHH:mm o YYYY-MM-DD HH:mm'
@@ -659,7 +594,8 @@ const contraproponerSolicitud = async (req, res) => {
             horaParte: fechaParseada.horaParte,
             hora: fechaParseada.hora,
             minuto: fechaParseada.minuto,
-            fechaLocal: fechaParseada.fechaLocal,
+            diaCod: fechaParseada.diaCod,
+            timestampMs: fechaParseada.timestampMs,
             duracionMin: solicitud.duracion_minutos_c,
             excluirSolicitudId: solicitud.id_solicitud,
             transaction: t
@@ -671,7 +607,7 @@ const contraproponerSolicitud = async (req, res) => {
         }
 
         await solicitud.update({
-            fecha_hora_sugerida: fechaParseada.fechaHoraBD,
+            fecha_hora_sugerida: fechaParseada.fechaUtc,
             estado: 'S',
             fecha_ultima_actualizacion: new Date()
         }, { transaction: t });
@@ -762,8 +698,8 @@ const responderContrapropuesta = async (req, res) => {
                 });
             }
 
-            const fechaSugeridaStr = formatearFechaHoraDesdeBD(solicitud.fecha_hora_sugerida);
-            const fechaParseada = parsearFechaHoraSolicitud(fechaSugeridaStr);
+            const fechaSugeridaStr = formatearFechaHoraColombia(solicitud.fecha_hora_sugerida);
+            const fechaParseada = parsearFechaHoraColombia(fechaSugeridaStr);
 
             if (!fechaParseada) {
                 await t.rollback();
@@ -778,7 +714,8 @@ const responderContrapropuesta = async (req, res) => {
                 horaParte: fechaParseada.horaParte,
                 hora: fechaParseada.hora,
                 minuto: fechaParseada.minuto,
-                fechaLocal: fechaParseada.fechaLocal,
+                diaCod: fechaParseada.diaCod,
+                timestampMs: fechaParseada.timestampMs,
                 duracionMin: solicitud.duracion_minutos_c,
                 excluirSolicitudId: solicitud.id_solicitud,
                 transaction: t
@@ -790,7 +727,7 @@ const responderContrapropuesta = async (req, res) => {
             }
 
             await solicitud.update({
-                fecha_hora_solicitada: fechaParseada.fechaHoraBD,
+                fecha_hora_solicitada: fechaParseada.fechaUtc,
                 fecha_hora_sugerida: null,
                 estado: 'A',
                 fecha_ultima_actualizacion: new Date()
@@ -837,12 +774,22 @@ const cancelarSolicitud = async (req, res) => {
             return res.status(404).json({ msg: 'Solicitud no encontrada en el sistema' });
         }
 
-        if (solicitud.id_cliente !== id_usuario && solicitud.id_proveedor !== id_usuario) {
+        const esClientePropietario = solicitud.id_cliente === id_usuario;
+        const esProveedorAsignado = solicitud.id_proveedor === id_usuario;
+
+        if (!esClientePropietario && !esProveedorAsignado) {
             await t.rollback();
             return res.status(403).json({ msg: 'No tienes autorización para cancelar esta solicitud' });
         }
 
-        if (!['P', 'S', 'A'].includes(solicitud.estado)) {
+        if (esProveedorAsignado && !esClientePropietario) {
+            if (solicitud.estado !== 'A') {
+                await t.rollback();
+                return res.status(409).json({
+                    msg: `Como proveedor solo puedes cancelar reservas en estado Aceptada (estado actual: '${solicitud.estado}')`
+                });
+            }
+        } else if (!['P', 'S', 'A'].includes(solicitud.estado)) {
             await t.rollback();
             return res.status(409).json({
                 msg: `Solo se pueden cancelar solicitudes en estado Pendiente, Sugerida o Aceptada (estado actual: '${solicitud.estado}')`
@@ -966,14 +913,14 @@ const obtenerAgendaProveedor = async (req, res) => {
         ]);
 
         const agenda = reservasConfirmadas.map((r) => {
-            const inicioStr = formatearFechaHoraDesdeBD(r.fecha_hora_solicitada) || '';
+            const inicioStr = formatearFechaHoraColombia(r.fecha_hora_solicitada) || '';
             const [fecha = '', hora_inicio = ''] = inicioStr.split(' ');
 
             const inicioMs = new Date(r.fecha_hora_solicitada).getTime();
             const finDate = Number.isNaN(inicioMs)
                 ? null
                 : new Date(inicioMs + (Number(r.duracion_minutos_c || 0) * 60 * 1000));
-            const finStr = finDate ? formatearFechaHoraDesdeBD(finDate) || '' : '';
+            const finStr = finDate ? formatearFechaHoraColombia(finDate) || '' : '';
             const hora_fin = finStr.split(' ')[1] || '';
 
             return {
@@ -1002,11 +949,18 @@ const obtenerAgendaProveedor = async (req, res) => {
             };
         });
 
+        const periodosFormateados = periodosBloqueados.map((p) => ({
+            id: p.id,
+            id_proveedor: p.id_proveedor,
+            fecha_inicio: obtenerFechaYMDColombia(p.fecha_inicio),
+            fecha_fin: obtenerFechaYMDColombia(p.fecha_fin)
+        }));
+
         return res.json({
             ok: true,
             total_compromisos: agenda.length,
             agenda,
-            periodos_no_disponibles: periodosBloqueados
+            periodos_no_disponibles: periodosFormateados
         });
     } catch (error) {
         console.error('Error al consultar agenda operativa del proveedor:', error);

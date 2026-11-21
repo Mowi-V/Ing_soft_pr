@@ -1,9 +1,10 @@
 const jwt = require('jsonwebtoken');
+const { estaTokenRevocado } = require('../helpers/tokens-revocados');
 
 const validarJWT = (req, res, next) => {
     const token = req.cookies?.token || req.header('x-token');
 
-if (!token) {
+    if (!token) {
         return res.status(401).json({ 
             ok: false,
             msg: 'No hay token en la petición. Inicie sesión.' 
@@ -11,7 +12,16 @@ if (!token) {
     }
 
     try {
-        const { id_usuario, rol } = jwt.verify(token, process.env.SECRETORPRIVATEKEY);
+        const payload = jwt.verify(token, process.env.SECRETORPRIVATEKEY);
+
+        if (estaTokenRevocado(token, payload)) {
+            return res.status(401).json({
+                ok: false,
+                msg: 'Sesión cerrada o token revocado. Inicie sesión nuevamente.'
+            });
+        }
+
+        const { id_usuario, rol } = payload;
         req.usuarioAutenticado = { id_usuario, rol };
         next();
     } catch (error) {

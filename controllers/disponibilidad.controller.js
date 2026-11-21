@@ -1,5 +1,9 @@
 const Disponibilidad = require('../models/disponibilidad');
 const PeriodoNoDisponible = require('../models/periodoNoDisponible');
+const {
+    parsearFechaSoloDiaColombia,
+    obtenerFechaYMDColombia
+} = require('../helpers/fechas-colombia');
 
 const ORDEN_SEMANA = { LU: 1, MA: 2, MI: 3, JU: 4, VI: 5, SA: 6, DO: 7 };
 
@@ -8,6 +12,13 @@ const convertirAMinutos = (horaStr) => {
     const [h, m] = horaStr.split(':').map(Number);
     return h * 60 + m;
 };
+
+const serializarPeriodo = (p) => ({
+    id: p.id,
+    id_proveedor: p.id_proveedor,
+    fecha_inicio: obtenerFechaYMDColombia(p.fecha_inicio),
+    fecha_fin: obtenerFechaYMDColombia(p.fecha_fin)
+});
 
 // HU-011: Obtener disponibilidad propia
 const obtenerMiDisponibilidad = async (req, res) => {
@@ -30,7 +41,7 @@ const obtenerMiDisponibilidad = async (req, res) => {
         res.json({
             ok: true,
             disponibilidad: franjas,
-            periodos_no_disponibles: periodos
+            periodos_no_disponibles: periodos.map(serializarPeriodo)
         });
     } catch (error) {
         console.error('Error al consultar disponibilidad:', error);
@@ -58,7 +69,7 @@ const obtenerDisponibilidadProveedor = async (req, res) => {
         res.json({
             ok: true,
             disponibilidad: franjas,
-            periodos_no_disponibles: periodos
+            periodos_no_disponibles: periodos.map(serializarPeriodo)
         });
     } catch (error) {
         console.error('Error al consultar disponibilidad del proveedor:', error);
@@ -148,7 +159,16 @@ const agregarPeriodoNoDisponible = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
     const { fecha_inicio, fecha_fin } = req.body;
 
-    if (new Date(fecha_inicio) > new Date(fecha_fin)) {
+    const inicioParseado = parsearFechaSoloDiaColombia(fecha_inicio);
+    const finParseado = parsearFechaSoloDiaColombia(fecha_fin);
+
+    if (!inicioParseado || !finParseado) {
+        return res.status(400).json({
+            msg: 'Formato de fecha inválido. Utilice YYYY-MM-DD'
+        });
+    }
+
+    if (inicioParseado.ymd > finParseado.ymd) {
         return res.status(400).json({
             msg: 'La fecha de inicio no puede ser posterior a la fecha final'
         });
@@ -157,14 +177,14 @@ const agregarPeriodoNoDisponible = async (req, res) => {
     try {
         const nuevoPeriodo = await PeriodoNoDisponible.create({
             id_proveedor: id_usuario,
-            fecha_inicio,
-            fecha_fin
+            fecha_inicio: inicioParseado.inicioDiaUtc,
+            fecha_fin: finParseado.finDiaUtc
         });
 
         res.status(201).json({
             ok: true,
             msg: 'Periodo de no disponibilidad bloqueado con éxito',
-            periodo: nuevoPeriodo
+            periodo: serializarPeriodo(nuevoPeriodo)
         });
     } catch (error) {
         console.error('Error al agregar periodo no disponible:', error);

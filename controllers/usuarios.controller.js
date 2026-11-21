@@ -5,6 +5,7 @@ const Cliente = require('../models/cliente');
 const Proveedor = require('../models/proveedor');
 const Barrio = require('../models/barrio');
 const { generarJWT } = require('../helpers/generar-jwt');
+const { revocarToken } = require('../helpers/tokens-revocados');
 
 const registrarUsuario = async (req, res) => {
     const { 
@@ -122,6 +123,11 @@ const login = async (req, res) => {
 };
 
 const logout = (req, res) => {
+    const token = req.cookies?.token || req.header('x-token');
+    if (token) {
+        revocarToken(token);
+    }
+
     res.clearCookie('token', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',

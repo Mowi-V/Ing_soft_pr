@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const nodemailer = require('nodemailer'); 
+const nodemailer = require('nodemailer');
+const { bdMySQL } = require('../database/db_conection');
 const Usuario = require('../models/usuario');
 const RecuperacionCredencial = require('../models/recuperacion');
 
@@ -9,9 +10,12 @@ const transporter = nodemailer.createTransport({
     port: 587,
     secure: false,
     family: 4,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
     auth: {
-        user: process.env.EMAIL_USER, 
-        pass: process.env.EMAIL_PASS 
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
     },
     tls: {
         // Garantiza que la negociación TLS no falle por certificados intermedios
@@ -26,61 +30,69 @@ const solicitarRecuperacion = async (req, res) => {
     try {
         const usuario = await Usuario.findOne({ where: { correo_electronico } });
         if (!usuario) {
-            return res.status(200).json({ 
-                msg: 'Si el correo está registrado, recibirás un enlace con instrucciones.' 
+            return res.status(200).json({
+                msg: 'Si el correo está registrado, recibirás un enlace con instrucciones.'
             });
         }
 
-        await RecuperacionCredencial.update(
-            { usado: 1 }, 
-            { where: { id_usuario: usuario.id_usuario, usado: 0 } }
-        );
+        const t = await bdMySQL.transaction();
 
-        const token = crypto.randomBytes(32).toString('hex');
-        
-        const fecha_creacion = new Date();
-        const fecha_expiracion = new Date(fecha_creacion.getTime() + (60 * 60 * 1000));
+        try {
+            await RecuperacionCredencial.update(
+                { usado: 1 },
+                {
+                    where: { id_usuario: usuario.id_usuario, usado: 0 },
+                    transaction: t
+                }
+            );
 
-        await RecuperacionCredencial.create({
-            id_usuario: usuario.id_usuario,
-            token,
-            fecha_creacion,
-            fecha_expiracion,
-            usado: 0
-        });
+            const token = crypto.randomBytes(32).toString('hex');
 
-        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-        const enlaceRecuperacion = `${frontendUrl}/restablecer-password?token=${token}`;
-        const mailOptions = {
-            from: `"Soporte Bienestar en Casa" <${process.env.EMAIL_USER}>`, 
-            to: correo_electronico, 
-            subject: 'Recuperación de Contraseña',
-            html: `
-                <h3>Hola, ${usuario.nombre}</h3>
-                <p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente enlace para crear una nueva:</p>
-                <a href="${enlaceRecuperacion}" target="_blank">${enlaceRecuperacion}</a>
-                <p>Este enlace expirará en 1 hora.</p>
-                <p>Si no solicitaste este cambio, puedes ignorar este correo.</p>
-            `
-        };
+            const fecha_creacion = new Date();
+            const fecha_expiracion = new Date(fecha_creacion.getTime() + (60 * 60 * 1000));
 
-        await transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-                console.error('Error al enviar el correo:', error);
-                
-            } else {
-                console.log('Correo de recuperación enviado:', info.response);
-                        res.status(200).json({ 
-                            msg: 'Si el correo está registrado, recibirás un enlace con instrucciones.' 
-                        });
+            await RecuperacionCredencial.create({
+                id_usuario: usuario.id_usuario,
+                token,
+                fecha_creacion,
+                fecha_expiracion,
+                usado: 0
+            }, { transaction: t });
+
+            const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+            const enlaceRecuperacion = `${frontendUrl}/restablecer-password?token=${token}`;
+            const mailOptions = {
+                from: `"Soporte Bienestar en Casa" <${process.env.EMAIL_USER}>`,
+                to: correo_electronico,
+                subject: 'Recuperación de Contraseña',
+                html: `
+                    <h3>Hola, ${usuario.nombre}</h3>
+                    <p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente enlace para crear una nueva:</p>
+                    <a href="${enlaceRecuperacion}" target="_blank">${enlaceRecuperacion}</a>
+                    <p>Este enlace expirará en 1 hora.</p>
+                    <p>Si no solicitaste este cambio, puedes ignorar este correo.</p>
+                `
+            };
+
+            const info = await transporter.sendMail(mailOptions);
+            await t.commit();
+            console.log('Correo de recuperación enviado:', info?.response || 'OK');
+
+            return res.status(200).json({
+                msg: 'Si el correo está registrado, recibirás un enlace con instrucciones.'
+            });
+        } catch (errEnvio) {
+            if (!t.finished) {
+                await t.rollback();
             }
-        });
-
-
-
+            console.error('Error al enviar el correo de recuperación:', errEnvio);
+            return res.status(503).json({
+                msg: 'No fue posible enviar el correo de recuperación en este momento. Intenta nuevamente más tarde.'
+            });
+        }
     } catch (error) {
         console.error(error);
-        res.status(500).json({ msg: 'Error al procesar la solicitud' });
+        return res.status(500).json({ msg: 'Error al procesar la solicitud' });
     }
 };
 
@@ -169,5 +181,6 @@ const verificarToken = async (req, res) => {
 module.exports = {
     solicitarRecuperacion,
     restablecerContrasena,
-    verificarToken
+    verificarToken,
+    transporter
 };
