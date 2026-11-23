@@ -1,8 +1,13 @@
+const { Op } = require('sequelize');
 const Disponibilidad = require('../models/disponibilidad');
 const PeriodoNoDisponible = require('../models/periodoNoDisponible');
+const Solicitud = require('../models/solicitud');
 const {
     parsearFechaSoloDiaColombia,
-    obtenerFechaYMDColombia
+    obtenerFechaYMDColombia,
+    formatearFechaHoraColombia,
+    obtenerInicioHoyColombiaUtc,
+    obtenerMaxPendientesSolapadas
 } = require('../helpers/fechas-colombia');
 
 const ORDEN_SEMANA = { LU: 1, MA: 2, MI: 3, JU: 4, VI: 5, SA: 6, DO: 7 };
@@ -49,27 +54,72 @@ const obtenerMiDisponibilidad = async (req, res) => {
     }
 };
 
-// HU-011: Consulta pública para el Cliente
+// HU-011: Consulta pública para el Cliente (incluye ocupación futura anonimizada)
 const obtenerDisponibilidadProveedor = async (req, res) => {
     const { id_proveedor } = req.params;
 
     try {
-        const franjas = await Disponibilidad.findAll({
-            where: { id_proveedor },
-            order: [['hora_inicio', 'ASC']]
-        });
+        const inicioHoyUtc = obtenerInicioHoyColombiaUtc();
+
+        const [franjas, periodos, citasFuturas] = await Promise.all([
+            Disponibilidad.findAll({
+                where: { id_proveedor },
+                order: [['hora_inicio', 'ASC']]
+            }),
+            PeriodoNoDisponible.findAll({
+                where: { id_proveedor },
+                order: [['fecha_inicio', 'ASC']]
+            }),
+            Solicitud.findAll({
+                where: {
+                    id_proveedor,
+                    estado: { [Op.in]: ['A', 'P'] },
+                    fecha_hora_solicitada: { [Op.gte]: inicioHoyUtc }
+                },
+                attributes: ['fecha_hora_solicitada', 'duracion_minutos_c', 'estado'],
+                order: [['fecha_hora_solicitada', 'ASC']]
+            })
+        ]);
 
         franjas.sort((a, b) => (ORDEN_SEMANA[a.dia] || 0) - (ORDEN_SEMANA[b.dia] || 0));
 
-        const periodos = await PeriodoNoDisponible.findAll({
-            where: { id_proveedor },
-            order: [['fecha_inicio', 'ASC']]
-        });
+        const reservasConfirmadas = [];
+        const pendientesActivas = [];
+
+        for (const cita of citasFuturas) {
+            const inicioDate = new Date(cita.fecha_hora_solicitada);
+            const inicioMs = inicioDate.getTime();
+            if (Number.isNaN(inicioMs)) continue;
+
+            const duracionMin = Number(cita.duracion_minutos_c || 0);
+            const finMs = inicioMs + (duracionMin * 60 * 1000);
+            const inicioStr = formatearFechaHoraColombia(inicioDate) || '';
+            const finStr = formatearFechaHoraColombia(new Date(finMs)) || '';
+            const [fecha = '', hora_inicio = ''] = inicioStr.split(' ');
+            const hora_fin = finStr.split(' ')[1] || '';
+
+            const intervaloAnonimo = {
+                fecha,
+                hora_inicio,
+                hora_fin,
+                inicio_ms: inicioMs,
+                fin_ms: finMs
+            };
+
+            if (cita.estado === 'A') {
+                reservasConfirmadas.push(intervaloAnonimo);
+            } else if (cita.estado === 'P') {
+                pendientesActivas.push(intervaloAnonimo);
+            }
+        }
 
         res.json({
             ok: true,
             disponibilidad: franjas,
-            periodos_no_disponibles: periodos.map(serializarPeriodo)
+            periodos_no_disponibles: periodos.map(serializarPeriodo),
+            max_pendientes_por_franja: obtenerMaxPendientesSolapadas(),
+            reservas_confirmadas: reservasConfirmadas,
+            pendientes_activas: pendientesActivas
         });
     } catch (error) {
         console.error('Error al consultar disponibilidad del proveedor:', error);

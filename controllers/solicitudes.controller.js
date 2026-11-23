@@ -11,7 +11,9 @@ const PeriodoNoDisponible = require('../models/periodoNoDisponible');
 const {
     obtenerFechaYMDColombia,
     formatearFechaHoraColombia,
-    parsearFechaHoraColombia
+    parsearFechaHoraColombia,
+    obtenerMaxPendientesSolapadas,
+    haySolapamientoIntervalos
 } = require('../helpers/fechas-colombia');
 
 const convertirAMinutos = (horaStr) => {
@@ -155,75 +157,120 @@ const crearSolicitud = async (req, res) => {
         const { fechaParte, horaParte, hora, minuto, diaCod, timestampMs, fechaUtc } = fechaParseada;
         const id_proveedor = servicio.id_proveedor;
         const duracionMin = servicio.duracion_minutos;
+        const maxPendientes = obtenerMaxPendientesSolapadas();
 
-        const validacionAgenda = await validarDisponibilidadAgenda({
-            id_proveedor,
-            fechaParte,
-            horaParte,
-            hora,
-            minuto,
-            diaCod,
-            timestampMs,
-            duracionMin
-        });
+        const t = await bdMySQL.transaction();
 
-        if (!validacionAgenda.ok) {
-            return res.status(validacionAgenda.status).json({ msg: validacionAgenda.msg });
-        }
-
-        const { nuevaInicioMs, nuevaFinMs } = validacionAgenda;
-
-        const solicitudesActivasCliente = await Solicitud.findAll({
-            where: {
-                id_cliente,
-                id_servicio: servicio.id_servicio,
-                estado: ['P', 'S'] // Pendientes o con contrapropuesta activa
-            }
-        });
-
-        const existeSolicitudEnRango = solicitudesActivasCliente.some(s => {
-            const sBase = s.fecha_hora_sugerida
-                ? new Date(s.fecha_hora_sugerida)
-                : new Date(s.fecha_hora_solicitada);
-            const sInicioMs = sBase.getTime();
-            const sDuracion = s.duracion_minutos_c || duracionMin;
-            const sFinMs = sInicioMs + (sDuracion * 60 * 1000);
-
-            return (nuevaInicioMs < sFinMs && nuevaFinMs > sInicioMs);
-        });
-
-        if (existeSolicitudEnRango) {
-            return res.status(409).json({
-                msg: 'Ya tienes una solicitud activa para este servicio cuyo horario se cruza con el rango solicitado'
+        try {
+            // Orden canónico global de bloqueo (PROVEEDOR -> SOLICITUD) para serializar creación concurrente
+            await Proveedor.findByPk(id_proveedor, {
+                transaction: t,
+                lock: t.LOCK.UPDATE
             });
+
+            const validacionAgenda = await validarDisponibilidadAgenda({
+                id_proveedor,
+                fechaParte,
+                horaParte,
+                hora,
+                minuto,
+                diaCod,
+                timestampMs,
+                duracionMin,
+                transaction: t
+            });
+
+            if (!validacionAgenda.ok) {
+                await t.rollback();
+                return res.status(validacionAgenda.status).json({ msg: validacionAgenda.msg });
+            }
+
+            const { nuevaInicioMs, nuevaFinMs } = validacionAgenda;
+
+            // 1. Límite de solicitudes Pendientes ('P') solapadas por franja en el proveedor
+            const pendientesProveedor = await Solicitud.findAll({
+                where: {
+                    id_proveedor,
+                    estado: 'P'
+                },
+                transaction: t
+            });
+
+            const pendientesSolapadas = pendientesProveedor.filter((p) => {
+                const pInicioMs = new Date(p.fecha_hora_solicitada).getTime();
+                const pDuracion = p.duracion_minutos_c || duracionMin;
+                const pFinMs = pInicioMs + (pDuracion * 60 * 1000);
+                return haySolapamientoIntervalos(nuevaInicioMs, nuevaFinMs, pInicioMs, pFinMs);
+            }).length;
+
+            if (pendientesSolapadas >= maxPendientes) {
+                await t.rollback();
+                return res.status(409).json({
+                    msg: `Este horario ya alcanzó el límite máximo de solicitudes pendientes en revisión (${maxPendientes}). Por favor selecciona otra fecha u hora.`
+                });
+            }
+
+            // 2. Prevención de auto-solapamiento del mismo cliente en cualquier servicio o proveedor ('P', 'S', 'A')
+            const solicitudesActivasCliente = await Solicitud.findAll({
+                where: {
+                    id_cliente,
+                    estado: ['P', 'S', 'A']
+                },
+                transaction: t
+            });
+
+            const existeSolicitudEnRango = solicitudesActivasCliente.some((s) => {
+                const sBase = s.estado === 'S' && s.fecha_hora_sugerida
+                    ? new Date(s.fecha_hora_sugerida)
+                    : new Date(s.fecha_hora_solicitada);
+                const sInicioMs = sBase.getTime();
+                const sDuracion = s.duracion_minutos_c || duracionMin;
+                const sFinMs = sInicioMs + (sDuracion * 60 * 1000);
+
+                return haySolapamientoIntervalos(nuevaInicioMs, nuevaFinMs, sInicioMs, sFinMs);
+            });
+
+            if (existeSolicitudEnRango) {
+                await t.rollback();
+                return res.status(409).json({
+                    msg: 'Ya tienes otra solicitud o reserva activa que se cruza con este horario. Elige otra franja para evitar traslapes.'
+                });
+            }
+
+            const ahora = new Date();
+            const nuevaSolicitud = await Solicitud.create({
+                id_cliente,
+                id_proveedor,
+                id_servicio: servicio.id_servicio,
+                id_barrio: parseInt(id_barrio, 10),
+                nombre_servicio_c: servicio.nombre,
+                precio_c: servicio.precio,
+                duracion_minutos_c: servicio.duracion_minutos,
+                fecha_hora_solicitada: fechaUtc, // Date con offset -05:00 para consistencia bajo cualquier TZ del servidor
+                fecha_hora_sugerida: null,
+                direccion_atencion: direccion_atencion.trim(),
+                barrio_sector: barrioEncontrado.nombre,
+                informacion_complementaria: informacion_complementaria?.trim() || null,
+                observaciones: observaciones?.trim() || null,
+                estado: 'P',
+                motivo_rechazo_cancelacion: null,
+                fecha_creacion: ahora,
+                fecha_ultima_actualizacion: ahora
+            }, { transaction: t });
+
+            await t.commit();
+
+            return res.status(201).json({
+                ok: true,
+                msg: 'Solicitud creada con éxito bajo estado Pendiente',
+                solicitud: nuevaSolicitud
+            });
+        } catch (errTx) {
+            if (!t.finished) {
+                await t.rollback();
+            }
+            throw errTx;
         }
-
-        const ahora = new Date();
-        const nuevaSolicitud = await Solicitud.create({
-            id_cliente,
-            id_proveedor,
-            id_servicio: servicio.id_servicio,
-            id_barrio: parseInt(id_barrio, 10),
-            nombre_servicio_c: servicio.nombre,
-            precio_c: servicio.precio,
-            duracion_minutos_c: servicio.duracion_minutos,
-            fecha_hora_solicitada: fechaUtc, // Date con offset -05:00 para consistencia bajo cualquier TZ del servidor
-            fecha_hora_sugerida: null,
-            direccion_atencion: direccion_atencion.trim(),
-            barrio_sector: barrioEncontrado.nombre,
-            informacion_complementaria: informacion_complementaria?.trim() || null,
-            observaciones: observaciones?.trim() || null,
-            estado: 'P',
-            motivo_rechazo_cancelacion: null,
-            fecha_creacion: ahora,
-            fecha_ultima_actualizacion: ahora
-        });
-
-        res.status(201).json({
-            ok: true,
-            msg: 'Solicitud creada con éxito bajo estado Pendiente',
-            solicitud: nuevaSolicitud
-        });
 
     } catch (error) {
         console.error('Error al registrar solicitud:', error);
@@ -724,6 +771,30 @@ const responderContrapropuesta = async (req, res) => {
             if (!validacionAgenda.ok) {
                 await t.rollback();
                 return res.status(409).json({ msg: validacionAgenda.msg });
+            }
+
+            // Validar que el cliente no tenga ya otra reserva confirmada ('A') en el mismo horario
+            const reservasConfirmadasCliente = await Solicitud.findAll({
+                where: {
+                    id_cliente,
+                    estado: 'A'
+                },
+                transaction: t
+            });
+
+            const { nuevaInicioMs, nuevaFinMs } = validacionAgenda;
+            const clienteAutoColisiona = reservasConfirmadasCliente.some((r) => {
+                if (r.id_solicitud === solicitud.id_solicitud) return false;
+                const rInicioMs = new Date(r.fecha_hora_solicitada).getTime();
+                const rFinMs = rInicioMs + ((r.duracion_minutos_c || solicitud.duracion_minutos_c) * 60 * 1000);
+                return haySolapamientoIntervalos(nuevaInicioMs, nuevaFinMs, rInicioMs, rFinMs);
+            });
+
+            if (clienteAutoColisiona) {
+                await t.rollback();
+                return res.status(409).json({
+                    msg: 'El horario sugerido se cruza con otra reserva que ya tienes confirmada en tu agenda'
+                });
             }
 
             await solicitud.update({

@@ -157,6 +157,30 @@ const parsearFechaSoloDiaColombia = (valor) => {
     };
 };
 
+/**
+ * Devuelve el inicio del día actual (00:00:00-05:00) en hora oficial de Colombia.
+ */
+const obtenerInicioHoyColombiaUtc = () => {
+    const hoyYmd = obtenerFechaYMDColombia(new Date());
+    return new Date(`${hoyYmd}T00:00:00${OFFSET_CO}`);
+};
+
+/**
+ * Retorna el límite máximo configurado de solicitudes pendientes ('P') solapadas
+ * permitidas en una misma franja horaria de un proveedor (por defecto 3).
+ */
+const obtenerMaxPendientesSolapadas = () => {
+    const parsed = parseInt(process.env.MAX_PENDIENTES_SOLAPADAS || '3', 10);
+    return Number.isInteger(parsed) && parsed >= 1 ? parsed : 3;
+};
+
+/**
+ * Determina si dos intervalos semiabiertos [inicioA, finA) y [inicioB, finB) se solapan.
+ */
+const haySolapamientoIntervalos = (inicioA, finA, inicioB, finB) => {
+    return inicioA < finB && finA > inicioB;
+};
+
 module.exports = {
     ZONA_HORARIA_CO,
     OFFSET_CO,
@@ -164,5 +188,8 @@ module.exports = {
     obtenerFechaYMDColombia,
     formatearFechaHoraColombia,
     parsearFechaHoraColombia,
-    parsearFechaSoloDiaColombia
+    parsearFechaSoloDiaColombia,
+    obtenerInicioHoyColombiaUtc,
+    obtenerMaxPendientesSolapadas,
+    haySolapamientoIntervalos
 };
