@@ -1,5 +1,14 @@
+const { Op } = require('sequelize');
 const Disponibilidad = require('../models/disponibilidad');
 const PeriodoNoDisponible = require('../models/periodoNoDisponible');
+const Solicitud = require('../models/solicitud');
+const {
+    parsearFechaSoloDiaColombia,
+    obtenerFechaYMDColombia,
+    formatearFechaHoraColombia,
+    obtenerInicioHoyColombiaUtc,
+    obtenerMaxPendientesSolapadas
+} = require('../helpers/fechas-colombia');
 
 const ORDEN_SEMANA = { LU: 1, MA: 2, MI: 3, JU: 4, VI: 5, SA: 6, DO: 7 };
 
@@ -8,6 +17,13 @@ const convertirAMinutos = (horaStr) => {
     const [h, m] = horaStr.split(':').map(Number);
     return h * 60 + m;
 };
+
+const serializarPeriodo = (p) => ({
+    id: p.id,
+    id_proveedor: p.id_proveedor,
+    fecha_inicio: obtenerFechaYMDColombia(p.fecha_inicio),
+    fecha_fin: obtenerFechaYMDColombia(p.fecha_fin)
+});
 
 // HU-011: Obtener disponibilidad propia
 const obtenerMiDisponibilidad = async (req, res) => {
@@ -30,7 +46,7 @@ const obtenerMiDisponibilidad = async (req, res) => {
         res.json({
             ok: true,
             disponibilidad: franjas,
-            periodos_no_disponibles: periodos
+            periodos_no_disponibles: periodos.map(serializarPeriodo)
         });
     } catch (error) {
         console.error('Error al consultar disponibilidad:', error);
@@ -38,27 +54,72 @@ const obtenerMiDisponibilidad = async (req, res) => {
     }
 };
 
-// HU-011: Consulta pública para el Cliente
+// HU-011: Consulta pública para el Cliente (incluye ocupación futura anonimizada)
 const obtenerDisponibilidadProveedor = async (req, res) => {
     const { id_proveedor } = req.params;
 
     try {
-        const franjas = await Disponibilidad.findAll({
-            where: { id_proveedor },
-            order: [['hora_inicio', 'ASC']]
-        });
+        const inicioHoyUtc = obtenerInicioHoyColombiaUtc();
+
+        const [franjas, periodos, citasFuturas] = await Promise.all([
+            Disponibilidad.findAll({
+                where: { id_proveedor },
+                order: [['hora_inicio', 'ASC']]
+            }),
+            PeriodoNoDisponible.findAll({
+                where: { id_proveedor },
+                order: [['fecha_inicio', 'ASC']]
+            }),
+            Solicitud.findAll({
+                where: {
+                    id_proveedor,
+                    estado: { [Op.in]: ['A', 'P'] },
+                    fecha_hora_solicitada: { [Op.gte]: inicioHoyUtc }
+                },
+                attributes: ['fecha_hora_solicitada', 'duracion_minutos_c', 'estado'],
+                order: [['fecha_hora_solicitada', 'ASC']]
+            })
+        ]);
 
         franjas.sort((a, b) => (ORDEN_SEMANA[a.dia] || 0) - (ORDEN_SEMANA[b.dia] || 0));
 
-        const periodos = await PeriodoNoDisponible.findAll({
-            where: { id_proveedor },
-            order: [['fecha_inicio', 'ASC']]
-        });
+        const reservasConfirmadas = [];
+        const pendientesActivas = [];
+
+        for (const cita of citasFuturas) {
+            const inicioDate = new Date(cita.fecha_hora_solicitada);
+            const inicioMs = inicioDate.getTime();
+            if (Number.isNaN(inicioMs)) continue;
+
+            const duracionMin = Number(cita.duracion_minutos_c || 0);
+            const finMs = inicioMs + (duracionMin * 60 * 1000);
+            const inicioStr = formatearFechaHoraColombia(inicioDate) || '';
+            const finStr = formatearFechaHoraColombia(new Date(finMs)) || '';
+            const [fecha = '', hora_inicio = ''] = inicioStr.split(' ');
+            const hora_fin = finStr.split(' ')[1] || '';
+
+            const intervaloAnonimo = {
+                fecha,
+                hora_inicio,
+                hora_fin,
+                inicio_ms: inicioMs,
+                fin_ms: finMs
+            };
+
+            if (cita.estado === 'A') {
+                reservasConfirmadas.push(intervaloAnonimo);
+            } else if (cita.estado === 'P') {
+                pendientesActivas.push(intervaloAnonimo);
+            }
+        }
 
         res.json({
             ok: true,
             disponibilidad: franjas,
-            periodos_no_disponibles: periodos
+            periodos_no_disponibles: periodos.map(serializarPeriodo),
+            max_pendientes_por_franja: obtenerMaxPendientesSolapadas(),
+            reservas_confirmadas: reservasConfirmadas,
+            pendientes_activas: pendientesActivas
         });
     } catch (error) {
         console.error('Error al consultar disponibilidad del proveedor:', error);
@@ -148,7 +209,16 @@ const agregarPeriodoNoDisponible = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
     const { fecha_inicio, fecha_fin } = req.body;
 
-    if (new Date(fecha_inicio) > new Date(fecha_fin)) {
+    const inicioParseado = parsearFechaSoloDiaColombia(fecha_inicio);
+    const finParseado = parsearFechaSoloDiaColombia(fecha_fin);
+
+    if (!inicioParseado || !finParseado) {
+        return res.status(400).json({
+            msg: 'Formato de fecha inválido. Utilice YYYY-MM-DD'
+        });
+    }
+
+    if (inicioParseado.ymd > finParseado.ymd) {
         return res.status(400).json({
             msg: 'La fecha de inicio no puede ser posterior a la fecha final'
         });
@@ -157,14 +227,14 @@ const agregarPeriodoNoDisponible = async (req, res) => {
     try {
         const nuevoPeriodo = await PeriodoNoDisponible.create({
             id_proveedor: id_usuario,
-            fecha_inicio,
-            fecha_fin
+            fecha_inicio: inicioParseado.inicioDiaUtc,
+            fecha_fin: finParseado.finDiaUtc
         });
 
         res.status(201).json({
             ok: true,
             msg: 'Periodo de no disponibilidad bloqueado con éxito',
-            periodo: nuevoPeriodo
+            periodo: serializarPeriodo(nuevoPeriodo)
         });
     } catch (error) {
         console.error('Error al agregar periodo no disponible:', error);
