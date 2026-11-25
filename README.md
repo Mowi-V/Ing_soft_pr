@@ -1,2 +1,2 @@
 # Ing_soft_pr
-Rama de actualizacion de la estructura del frontend en react
+Comando para instalación de dependencias "npm install" y para iniciar la plataforma "npm start"
