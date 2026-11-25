@@ -39,7 +39,7 @@ class Server {
             await bdMySQL.authenticate();
             console.log('Connection OK a Nube.');
         } catch (error) {
-            console.error('No se pudo Conectar a la BD MySQL', error);
+            console.error('No fue posible conectarse a la BD MySQL', error);
         }
     }
     routes() {

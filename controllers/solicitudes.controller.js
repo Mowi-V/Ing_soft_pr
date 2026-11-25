@@ -22,11 +22,6 @@ const convertirAMinutos = (horaStr) => {
     return h * 60 + m;
 };
 
-/**
- * Valida reglas RN-10 (fecha futura) y RN-11 (bloqueos, franjas semanales y no solapamiento con citas 'A').
- * Opera siempre en hora oficial de Colombia (America/Bogota, UTC-5), independiente de process.env.TZ.
- * Retorna { ok: true, nuevaInicioMs, nuevaFinMs } o { ok: false, status, msg }.
- */
 const validarDisponibilidadAgenda = async ({
     id_proveedor,
     fechaParte,
@@ -162,7 +157,7 @@ const crearSolicitud = async (req, res) => {
         const t = await bdMySQL.transaction();
 
         try {
-            // Orden canónico global de bloqueo (PROVEEDOR -> SOLICITUD) para serializar creación concurrente
+            
             await Proveedor.findByPk(id_proveedor, {
                 transaction: t,
                 lock: t.LOCK.UPDATE
@@ -187,7 +182,7 @@ const crearSolicitud = async (req, res) => {
 
             const { nuevaInicioMs, nuevaFinMs } = validacionAgenda;
 
-            // 1. Límite de solicitudes Pendientes ('P') solapadas por franja en el proveedor
+            
             const pendientesProveedor = await Solicitud.findAll({
                 where: {
                     id_proveedor,
@@ -210,7 +205,7 @@ const crearSolicitud = async (req, res) => {
                 });
             }
 
-            // 2. Prevención de auto-solapamiento del mismo cliente en cualquier servicio o proveedor ('P', 'S', 'A')
+            
             const solicitudesActivasCliente = await Solicitud.findAll({
                 where: {
                     id_cliente,
@@ -246,7 +241,7 @@ const crearSolicitud = async (req, res) => {
                 nombre_servicio_c: servicio.nombre,
                 precio_c: servicio.precio,
                 duracion_minutos_c: servicio.duracion_minutos,
-                fecha_hora_solicitada: fechaUtc, // Date con offset -05:00 para consistencia bajo cualquier TZ del servidor
+                fecha_hora_solicitada: fechaUtc, 
                 fecha_hora_sugerida: null,
                 direccion_atencion: direccion_atencion.trim(),
                 barrio_sector: barrioEncontrado.nombre,
@@ -465,10 +460,6 @@ const obtenerDetalleSolicitudProveedor = async (req, res) => {
     }
 };
 
-/**
- * HU-015: Aceptación de una solicitud pendiente por el proveedor dentro de una transacción ACID.
- * Adquiere bloqueo pesimista por proveedor y solicitud para impedir dobles reservas concurrentes (RN-11, RN-12).
- */
 const aceptarSolicitud = async (req, res) => {
     const { id_usuario: id_proveedor } = req.usuarioAutenticado;
     const { id } = req.params;
@@ -476,7 +467,7 @@ const aceptarSolicitud = async (req, res) => {
     const t = await bdMySQL.transaction();
 
     try {
-        // Serializa mutaciones de agenda para este proveedor durante la transacción ACID
+        
         await Proveedor.findByPk(id_proveedor, {
             transaction: t,
             lock: t.LOCK.UPDATE
@@ -551,9 +542,7 @@ const aceptarSolicitud = async (req, res) => {
     }
 };
 
-/**
- * HU-016: Rechazo de una solicitud pendiente o sugerida por el proveedor con motivo obligatorio.
- */
+
 const rechazarSolicitud = async (req, res) => {
     const { id_usuario: id_proveedor } = req.usuarioAutenticado;
     const { id } = req.params;
@@ -593,11 +582,6 @@ const rechazarSolicitud = async (req, res) => {
     }
 };
 
-/**
- * HU-017: Contrapropuesta de nueva fecha y hora por el proveedor.
- * Valida que la solicitud pertenezca al proveedor y esté en estado 'P', que la fecha sugerida
- * sea futura (RN-10), quepa en disponibilidad sin bloqueos ni cruces con reservas 'A' (RN-11).
- */
 const contraproponerSolicitud = async (req, res) => {
     const { id_usuario: id_proveedor } = req.usuarioAutenticado;
     const { id } = req.params;
@@ -675,11 +659,7 @@ const contraproponerSolicitud = async (req, res) => {
     }
 };
 
-/**
- * HU-018: Respuesta del cliente a la contrapropuesta horaria ('S' -> 'A' o 'S' -> 'C').
- * Si acepta, revalida disponibilidad y ausencia de solapamientos dentro de una transacción ACID
- * respetando el orden canónico de bloqueo (PROVEEDOR -> SOLICITUD) y consolida fecha_hora_solicitada.
- */
+
 const responderContrapropuesta = async (req, res) => {
     const { id_usuario: id_cliente } = req.usuarioAutenticado;
     const { id } = req.params;
@@ -700,7 +680,7 @@ const responderContrapropuesta = async (req, res) => {
 
         try {
             if (decision === 'aceptar') {
-                // Orden canónico global de bloqueo (PROVEEDOR -> SOLICITUD) para evitar deadlocks con HU-015
+                
                 await Proveedor.findByPk(solicitudPrevia.id_proveedor, {
                     transaction: t,
                     lock: t.LOCK.UPDATE
@@ -773,7 +753,6 @@ const responderContrapropuesta = async (req, res) => {
                 return res.status(409).json({ msg: validacionAgenda.msg });
             }
 
-            // Validar que el cliente no tenga ya otra reserva confirmada ('A') en el mismo horario
             const reservasConfirmadasCliente = await Solicitud.findAll({
                 where: {
                     id_cliente,
@@ -823,10 +802,7 @@ const responderContrapropuesta = async (req, res) => {
     }
 };
 
-/**
- * HU-019: Cancelación de una solicitud o reserva activa ('P', 'S' o 'A')
- * por parte del cliente o proveedor asociado, exigiendo motivo obligatorio y liberando agenda si estaba en 'A'.
- */
+
 const cancelarSolicitud = async (req, res) => {
     const { id_usuario } = req.usuarioAutenticado;
     const { id } = req.params;
@@ -943,11 +919,7 @@ const finalizarSolicitud = async (req, res) => {
     }
 };
 
-/**
- * HU-019: Consulta cronológica de la agenda operativa del proveedor.
- * Devuelve únicamente reservas confirmadas ('A') con fecha, hora inicio/fin, servicio, cliente y dirección,
- * junto con los periodos bloqueados (excluyendo solicitudes 'P', 'S', 'R', 'C' y 'F').
- */
+
 const obtenerAgendaProveedor = async (req, res) => {
     const { id_usuario: id_proveedor } = req.usuarioAutenticado;
 
